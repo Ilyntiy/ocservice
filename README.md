@@ -69,6 +69,8 @@ Prompts:
 - Certificate validity in days (default: 365)
 - Max simultaneous connections (0 = unlimited)
 
+![Creating a certificate user](docs/screenshots/gen-client.png)
+
 ### `gen-login`
 Creates a login/password VPN user via `ocpasswd`. Only available when `AUTH_MODE=plain` or `AUTH_MODE=both`.
 
@@ -80,6 +82,8 @@ Prompts:
 Lists all users with their status, certificate dates, ban points and connection limit. Allows you to view connection details, edit `config-per-user`, kick, unban or delete a user.
 
 ![User Management Center](docs/screenshots/user-center.png)
+
+![User actions](docs/screenshots/user-actions.png)
 
 ---
 
