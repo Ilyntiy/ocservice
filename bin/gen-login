@@ -1,0 +1,94 @@
+#!/bin/bash
+
+# gen-login — create a new password-based VPN user
+# Part of ocservice — https://github.com/Ilyntiy/ocservice
+
+# =============================================================================
+# Load config
+# =============================================================================
+
+CONFIG="$(dirname "$(realpath "$0")")/ocservice.conf"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: config file not found: $CONFIG"
+  echo "Run install.sh first or create ocservice.conf manually."
+  exit 1
+fi
+source "$CONFIG"
+
+# =============================================================================
+# Check auth mode
+# =============================================================================
+
+if [[ "$AUTH_MODE" == "cert" ]]; then
+  echo "Error: password auth is disabled (AUTH_MODE=cert in ocservice.conf)."
+  exit 1
+fi
+
+mkdir -p "$CONFIG_PER_USER"
+
+# =============================================================================
+# Username
+# =============================================================================
+
+while true; do
+  read -rp "Username: " USERNAME
+  if [[ -z "$USERNAME" ]]; then
+    echo "Error: username cannot be empty."
+  elif [[ ! "$USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: invalid username. Allowed characters: letters, digits, - and _"
+  elif grep -q "^$USERNAME:" "$USER_FILE" 2>/dev/null; then
+    echo "Error: user '$USERNAME' already exists in $USER_FILE"
+  else
+    break
+  fi
+done
+
+# =============================================================================
+# Max simultaneous connections
+# =============================================================================
+
+while true; do
+  read -rp "Max simultaneous connections (0 = unlimited): " MAX_CONN
+  MAX_CONN=${MAX_CONN:-0}
+  if [[ ! "$MAX_CONN" =~ ^[0-9]+$ ]]; then
+    echo "Error: enter a number (0 = unlimited)."
+  else
+    break
+  fi
+done
+
+# =============================================================================
+# Create user
+# =============================================================================
+
+PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c "$PASSWORD_LENGTH")
+
+printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" | "$OCPASSWD" -c "$USER_FILE" "$USERNAME" || {
+  echo "Error: failed to create user."
+  exit 1
+}
+
+# Write config-per-user only after successful user creation
+echo "max-same-clients = $MAX_CONN" > "$CONFIG_PER_USER/$USERNAME"
+
+# =============================================================================
+# Write to history log
+# =============================================================================
+
+echo "[login-created] $(date '+%Y-%m-%d %H:%M') | $USERNAME" >> "$USER_HISTORY"
+
+# =============================================================================
+# OUTPUT TEMPLATE — edit this block to customize what is shown / sent to users
+# =============================================================================
+
+echo
+echo "================================================"
+echo "  Username:        $USERNAME"
+echo "  Password:        $PASSWORD"
+echo "  Max connections: $MAX_CONN" "(0 = unlimited)"
+echo "  Gateway:         $SERVER_URL"
+[[ -n "$DOCS_URL" ]] && echo "  Docs / channel:  $DOCS_URL"
+echo "================================================"
+echo
+
+read -rp "Press Enter to return to menu..."

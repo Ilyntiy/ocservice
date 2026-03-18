@@ -1,0 +1,140 @@
+#!/bin/bash
+
+# ocservice — main menu for ocserv administration
+# Part of ocservice — https://github.com/Ilyntiy/ocservice
+
+# =============================================================================
+# Load config
+# =============================================================================
+
+SCRIPTS_DIR="$(dirname "$(realpath "$0")")"
+CONFIG="$SCRIPTS_DIR/ocservice.conf"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: config file not found: $CONFIG"
+  echo "Run install.sh first or create ocservice.conf manually."
+  exit 1
+fi
+source "$CONFIG"
+
+mkdir -p "$VPN_CLIENTS_DIR" "$CONFIG_PER_USER"
+
+# =============================================================================
+# Server status block
+# =============================================================================
+
+get_status_block() {
+  local raw
+  raw=$(sudo "$OCCTL" show status 2>/dev/null)
+
+  local status uptime active total failures banned rx tx
+  status=$(echo "$raw"   | awk -F': ' '/^\s*Status:/                     {print $2}')
+  uptime=$(echo "$raw"   | grep 'Up since:' | grep -oP '\(\s*\K[^)]+')
+  active=$(echo "$raw"   | awk -F': '  '/Active sessions:/               {print $2}')
+  total=$(echo "$raw"    | awk -F': '  '/Total sessions:/                {print $2}')
+  failures=$(echo "$raw" | awk -F': '  '/Total authentication failures:/ {print $2}')
+  banned=$(echo "$raw"   | awk -F': '  '/IPs in ban list:/               {print $2}')
+  rx=$(echo "$raw"       | awk -F': '  '/^\s*RX:/                        {print $2}')
+  tx=$(echo "$raw"       | awk -F': '  '/^\s*TX:/                        {print $2}')
+
+  [[ "$status" == "online" ]] && status="🟢 online" || status="🔴 $status"
+
+  echo "  Status:              $status"
+  echo "  ⏱  Uptime:           $uptime"
+  echo "  👥 Active sessions:  $active"
+  echo "  📊 Total sessions:   $total"
+  echo "  ❌ Auth failures:    $failures"
+  echo "  🚫 Banned IPs:       $banned"
+  echo "  📥 RX:               $rx"
+  echo "  📤 TX:               $tx"
+}
+
+# =============================================================================
+# Main menu
+# =============================================================================
+
+show_menu() {
+  clear
+  echo "==========================================="
+  echo "       🔐 $SERVER_NAME — ocserv Tool"
+  echo "==========================================="
+  get_status_block
+  echo "==========================================="
+  echo "📋 Users:"
+  [[ "$AUTH_MODE" != "plain" ]] && \
+  echo "  1 — Create certificate user"
+  [[ "$AUTH_MODE" != "cert"  ]] && \
+  echo "  2 — Create login/password user"
+  echo "  3 — User Management Center"
+  echo "-------------------------------------------"
+  echo "⚙️  Service:"
+  echo "  4 — View ocserv log"
+  echo "  5 — Open config file"
+  echo "  6 — Restart ocserv"
+  echo "  7 — Reload configuration"
+  echo "  8 — Active connections (occtl)"
+  echo "  q — Quit"
+  echo "==========================================="
+  read -rp "Enter action: " ACTION
+}
+
+while true; do
+  show_menu
+
+  case "$ACTION" in
+    q)
+      echo "Bye."
+      exit 0
+      ;;
+    1)
+      if [[ "$AUTH_MODE" == "plain" ]]; then
+        echo "Error: certificate auth is disabled (AUTH_MODE=plain)."
+        read -rp "Press Enter to return to menu..." dummy
+      else
+        "$SCRIPTS_DIR/gen-client"
+      fi
+      ;;
+    2)
+      if [[ "$AUTH_MODE" == "cert" ]]; then
+        echo "Error: password auth is disabled (AUTH_MODE=cert)."
+        read -rp "Press Enter to return to menu..." dummy
+      else
+        "$SCRIPTS_DIR/gen-login"
+      fi
+      ;;
+    3)
+      "$SCRIPTS_DIR/user-center"
+      ;;
+    4)
+      echo "Showing last 200 lines (Ctrl+C to exit):"
+      sudo journalctl -u ocserv -n 200 -f
+      ;;
+    5)
+      sudo nano "$OCSERV_CONF"
+      ;;
+    6)
+      echo "========== Restarting ocserv =========="
+      sudo systemctl restart ocserv
+      echo "✅ ocserv restarted."
+      echo "======================================="
+      read -rp "Press Enter to return to menu..." dummy
+      ;;
+    7)
+      echo "========== Reloading config =========="
+      sudo "$OCCTL" reload
+      echo "✅ Configuration reloaded."
+      echo "======================================"
+      read -rp "Press Enter to return to menu..." dummy
+      ;;
+    8)
+      echo "========== Active connections =========="
+      sudo "$OCCTL" show users
+      echo "========================================"
+      read -rp "Press Enter to return to menu..." dummy
+      ;;
+    *)
+      echo "Invalid choice."
+      read -rp "Press Enter to return to menu..." dummy
+      ;;
+  esac
+
+done

@@ -1,0 +1,281 @@
+#!/bin/bash
+
+# user-center — view and manage VPN users
+# Part of ocservice — https://github.com/Ilyntiy/ocservice
+
+# =============================================================================
+# Load config
+# =============================================================================
+
+CONFIG="$(dirname "$(realpath "$0")")/ocservice.conf"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: config file not found: $CONFIG"
+  echo "Run install.sh first or create ocservice.conf manually."
+  exit 1
+fi
+source "$CONFIG"
+
+# =============================================================================
+# Collect online sessions and ban points
+# =============================================================================
+
+declare -a all_users
+declare -a all_types
+
+# user -> IP (online users only)
+declare -A user_ip_map
+while read -r id user vhost ip rest; do
+  [[ "$id" =~ ^[0-9]+$ ]] && [[ "$user" != "(none)" ]] && user_ip_map["$user"]="$ip"
+done < <(sudo "$OCCTL" show users 2>/dev/null)
+
+# IP -> ban score
+declare -A ban_map
+while read -r ip score; do
+  [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ban_map["$ip"]="$score"
+done < <(sudo "$OCCTL" show ip ban points 2>/dev/null)
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+get_cert_info() {
+  local user=$1
+  local crt_file="$EASYRSA_DIR/pki/issued/$user.crt"
+
+  if [[ -f "$crt_file" ]]; then
+    local raw start_date end_date end_epoch now_epoch left_days
+    raw=$(openssl x509 -in "$crt_file" -noout -startdate -enddate 2>/dev/null)
+    start_date=$(grep notBefore <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
+    end_date=$(grep notAfter  <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
+    end_epoch=$(date -d "$end_date" +%s)
+    now_epoch=$(date +%s)
+    left_days=$(( (end_epoch - now_epoch) / 86400 ))
+    echo "$start_date|$end_date|$left_days"
+  else
+    echo "-|-|-"
+  fi
+}
+
+is_online() {
+  [[ -n "${user_ip_map[$1]}" ]] && echo "🟢" || echo "⚪"
+}
+
+get_max_sessions() {
+  local user=$1
+  if [[ -f "$CONFIG_PER_USER/$user" ]]; then
+    grep '^max-same-clients' "$CONFIG_PER_USER/$user" | awk '{print $3}'
+  else
+    echo "-"
+  fi
+}
+
+# =============================================================================
+# Build user table
+# =============================================================================
+
+clear
+echo "================ ⚙️  User Management Center =================="
+printf "👥 Active connections: %s\n" "${#user_ip_map[@]}"
+echo
+
+# Spinner while loading
+spinner() {
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local i=0
+  while true; do
+    printf "\r   %s  Loading user data..." "${frames[$((i % ${#frames[@]}))]}"
+    i=$((i+1))
+    sleep 0.08
+  done
+}
+spinner &
+SPINNER_PID=$!
+
+index=1
+table_output=""
+
+# Certificate users (shown unless AUTH_MODE=plain)
+if [[ "$AUTH_MODE" != "plain" ]]; then
+  cert_users=$(grep '^V' "$EASYRSA_DIR/pki/index.txt" | sed -n 's|.*CN=\(.*\)|\1|p' | sort)
+  while read -r user; do
+    [[ -z "$user" ]] && continue
+    all_users+=("$user")
+    all_types+=("cert")
+
+    cert_info=$(get_cert_info "$user")
+    IFS='|' read -r start end left <<< "$cert_info"
+    max_sessions=$(get_max_sessions "$user")
+    online_status=$(is_online "$user")
+    user_ip="${user_ip_map[$user]}"
+    ban_pts=$([[ -n "$user_ip" ]] && echo "${ban_map[$user_ip]:-0}" || echo "0")
+    display_name="$user"
+    [[ "$ban_pts" -ge 80 ]] && display_name="$user 🚫"
+    [[ "$ban_pts" -eq 0 ]] && ban_pts="-"
+
+    table_output+=$(printf "%-3s %-2s %-27s │ %-4s │ %-10s │ %-10s │ %-4s │ %-3s\n" \
+      "$index" "$online_status" "$display_name" "$ban_pts" "$start" "$end" "$left" "$max_sessions")
+    table_output+=$'\n'
+    index=$((index+1))
+  done <<< "$cert_users"
+fi
+
+# Login/password users (shown unless AUTH_MODE=cert)
+if [[ "$AUTH_MODE" != "cert" ]]; then
+  login_users=$(cut -d':' -f1 "$USER_FILE" 2>/dev/null | sort)
+  while read -r user; do
+    [[ -z "$user" ]] && continue
+    # Skip users already listed as cert users
+    if [[ "$AUTH_MODE" == "both" ]] && echo "$cert_users" | grep -q "^$user$"; then
+      continue
+    fi
+    all_users+=("$user")
+    all_types+=("login")
+    user_ip="${user_ip_map[$user]}"
+    ban_pts=$([[ -n "$user_ip" ]] && echo "${ban_map[$user_ip]:-0}" || echo "0")
+    display_name="$user"
+    [[ "$ban_pts" -ge 80 ]] && display_name="$user 🚫"
+    [[ "$ban_pts" -eq 0 ]] && ban_pts="-"
+    max_sessions=$(get_max_sessions "$user")
+    online_status=$(is_online "$user")
+
+    if [[ "$AUTH_MODE" == "plain" ]]; then
+      table_output+=$(printf "%-3s %-2s %-27s │ %-4s │ %-3s\n" \
+        "$index" "$online_status" "$display_name" "$ban_pts" "$max_sessions")
+    else
+      table_output+=$(printf "%-3s %-2s %-27s │ %-4s │ %-10s │ %-10s │ %-4s │ %-3s\n" \
+        "$index" "$online_status" "$display_name" "$ban_pts" "-" "-" "-" "$max_sessions")
+    fi
+    table_output+=$'\n'
+    index=$((index+1))
+  done <<< "$login_users"
+fi
+
+kill "$SPINNER_PID" 2>/dev/null
+wait "$SPINNER_PID" 2>/dev/null
+printf "\r\033[K"
+
+# =============================================================================
+# Display table
+# =============================================================================
+
+clear
+echo "================ ⚙️  User Management Center =================="
+printf "👥 Active connections: %s\n" "${#user_ip_map[@]}"
+echo
+
+if [[ "$AUTH_MODE" == "plain" ]]; then
+  printf "%-3s %-2s %-27s │ %-4s │ %-3s\n" "#" "" "Name" "Ban point" "MAX"
+  echo "------------------------------------------------------------"
+else
+  printf "%-3s %-2s %-27s │ %-4s │ %-10s │ %-10s │ %-4s │ %-3s\n" "#" "" "Name" "BP" "Created" "Expires" "Left" "MAX"
+  echo "-----------------------------------------------------------------------------------------------"
+fi
+
+echo "$table_output"
+
+if [[ "$AUTH_MODE" == "plain" ]]; then
+  echo "------------------------------------------------------------"
+else
+  echo "-----------------------------------------------------------------------------------------------"
+fi
+
+echo "  0 — View user-history.log"
+echo "  q — Quit"
+echo
+read -rp "Select user by number (or 0/q): " choice
+
+# =============================================================================
+# Handle choice
+# =============================================================================
+
+if [[ "$choice" == "q" ]]; then
+  exit 0
+elif [[ "$choice" == "0" ]]; then
+  echo "=========== User action log ==========="
+  cat "$USER_HISTORY" 2>/dev/null || echo "(empty)"
+  echo "======================================="
+elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_users[@]} )); then
+  selected_user="${all_users[$((choice-1))]}"
+  selected_type="${all_types[$((choice-1))]}"
+  selected_ip="${user_ip_map[$selected_user]}"
+  selected_ban=$([[ -n "$selected_ip" ]] && echo "${ban_map[$selected_ip]:-0}" || echo "0")
+
+  echo
+  echo "📊 Connection info:"
+  raw=$(sudo "$OCCTL" show user "$selected_user" 2>/dev/null)
+  if [[ -z "$raw" ]] || echo "$raw" | grep -q "not found"; then
+    echo "  (user is not connected)"
+  else
+    echo "$raw"
+  fi
+  echo
+
+  echo "🔧 Actions for: $selected_user"
+  echo "  1 — Edit config (config-per-user)"
+  echo "  2 — Delete user"
+  [[ -n "$selected_ip" ]] && \
+  echo "  3 — Kick user (IP: $selected_ip)"
+  [[ -n "$selected_ip" && "$selected_ban" -gt 0 ]] && \
+  echo "  4 — Reset ban points (current: $selected_ban, IP: $selected_ip)"
+  echo "  0 — Back"
+  read -rp "Select action 1-0: " action
+
+  case "$action" in
+    1)
+      nano "$CONFIG_PER_USER/$selected_user"
+      ;;
+    2)
+      read -rp "Delete '$selected_user'? This cannot be undone. (y/n): " confirm
+      if [[ "$confirm" == "y" ]]; then
+        if [[ "$selected_type" == "cert" ]]; then
+          cd "$EASYRSA_DIR" || { echo "Error: easy-rsa directory not found."; exit 1; }
+          ./easyrsa revoke "$selected_user"
+          ./easyrsa gen-crl
+          rm -f "$VPN_CLIENTS_DIR/$selected_user.p12"
+        fi
+        if [[ "$selected_type" == "login" ]]; then
+          "$OCPASSWD" -d -c "$USER_FILE" "$selected_user"
+        fi
+        rm -f "$CONFIG_PER_USER/$selected_user"
+        echo "[deleted] $(date '+%Y-%m-%d %H:%M') | $selected_user | $selected_type" >> "$USER_HISTORY"
+        echo "✅ User '$selected_user' deleted."
+      else
+        echo "Cancelled."
+      fi
+      ;;
+    3)
+      if [[ -z "$selected_ip" ]]; then
+        echo "User is not connected."
+      else
+        read -rp "Kick '$selected_user'? (y/n): " confirm
+        if [[ "$confirm" == "y" ]]; then
+          sudo "$OCCTL" disconnect user "$selected_user"
+          echo "[kicked] $(date '+%Y-%m-%d %H:%M') | $selected_user" >> "$USER_HISTORY"
+          echo "✅ $selected_user disconnected."
+        else
+          echo "Cancelled."
+        fi
+      fi
+      ;;
+    4)
+      if [[ -n "$selected_ip" && "$selected_ban" -gt 0 ]]; then
+        sudo "$OCCTL" unban ip "$selected_ip"
+        echo "[unbanned] $(date '+%Y-%m-%d %H:%M') | $selected_user | IP: $selected_ip | cleared $selected_ban points" >> "$USER_HISTORY"
+        echo "✅ Ban points cleared ($selected_ip)."
+      else
+        echo "No active ban points or user is not online."
+      fi
+      ;;
+    0)
+      exec "$0"
+      ;;
+    *)
+      echo "Invalid choice."
+      ;;
+  esac
+else
+  echo "Invalid choice."
+fi
+
+read -rp "Press Enter to return to User Management Center..."
+exec "$0"
