@@ -12,7 +12,7 @@ A set of bash scripts for managing [ocserv](https://ocserv.openconnect-vpn.net/)
 - Kick users and reset ban points
 - Server status block in the main menu (uptime, sessions, RX/TX)
 - Supports `cert`, `plain` and `both` authentication modes
-- Camouflage URL auto-detected from `ocserv.conf` during install
+- Camouflage URL auto-detected from `ocserv.conf` during install (port included if non-standard)
 - Username pool — auto-generate unique names from a customizable list
 
 ---
