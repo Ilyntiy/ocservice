@@ -16,24 +16,26 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 source "$CONFIG"
 
+LIB="$(dirname "$(realpath "$0")")/ocnames"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: ocnames not found: $LIB"
+  exit 1
+fi
+source "$LIB"
+
 mkdir -p "$VPN_CLIENTS_DIR" "$CONFIG_PER_USER"
 
 # =============================================================================
 # Username
 # =============================================================================
 
-while true; do
-  read -rp "Username: " USERNAME
-  if [[ -z "$USERNAME" ]]; then
-    echo "Error: username cannot be empty."
-  elif [[ ! "$USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: invalid username. Allowed characters: letters, digits, - and _"
-  elif [[ -f "$EASYRSA_DIR/pki/issued/$USERNAME.crt" ]]; then
-    echo "Error: certificate for '$USERNAME' already exists."
-  else
-    break
-  fi
-done
+pick_username
+
+# Guard against duplicate certificate (belt-and-suspenders)
+if [[ -f "$EASYRSA_DIR/pki/issued/$USERNAME.crt" ]]; then
+  echo "Error: certificate for '$USERNAME' already exists."
+  exit 1
+fi
 
 # =============================================================================
 # Certificate validity

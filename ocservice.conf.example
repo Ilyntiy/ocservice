@@ -68,6 +68,25 @@ PASSWORD_LENGTH=20
 SERVER_NAME=MyVPN
 
 # =============================================================================
+# Username pool
+# =============================================================================
+
+# Set to "yes" to enable the name pool feature.
+# When enabled, gen-client and gen-login will offer a choice between picking
+# a name from the pool or entering one manually.
+# Set to "no" to always prompt for manual entry.
+NAMES_ENABLED=yes
+
+# Path to the file containing available usernames, one per line.
+# Lines starting with # and empty lines are ignored.
+# Add new names at any time — no restart needed.
+NAMES_FILE="$(dirname "$(realpath "$0")")/names.txt"
+
+# Path to the file where issued pool names are recorded.
+# Managed automatically by gen-client and gen-login. Do not edit manually.
+NAMES_USED_FILE="$(dirname "$(realpath "$0")")/names_used.txt"
+
+# =============================================================================
 # Output template — shown to the client after user creation
 # Edit these to match what you want to send to each new user.
 # =============================================================================

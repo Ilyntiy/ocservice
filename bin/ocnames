@@ -1,0 +1,147 @@
+#!/bin/bash
+
+# ocnames — username pool helper for ocservice tools
+# Sourced by gen-client and gen-login. Do not execute directly.
+# Part of ocservice — https://github.com/Ilyntiy/ocservice
+
+# =============================================================================
+# pick_username
+#
+# Prompts the operator to pick a username from the name pool or enter manually.
+# Writes the result to the USERNAME variable.
+#
+# Duplicate detection sources:
+#   - easy-rsa pki/issued/*.crt  (certificate users)
+#   - ocpasswd                   (login/password users)
+#   - names_used.txt             (pool guard)
+#
+# If a name is found occupied but missing from NAMES_USED_FILE,
+# it is added there automatically to resync state.
+#
+# Required variables (set via ocservice.conf):
+#   NAMES_ENABLED, NAMES_FILE, NAMES_USED_FILE, EASYRSA_DIR, USER_FILE
+# =============================================================================
+
+pick_username() {
+  if [[ "${NAMES_ENABLED:-no}" == "yes" ]]; then
+    echo
+    echo "  1 — Pick name from pool"
+    echo "  2 — Enter manually"
+    echo
+    while true; do
+      read -rp "Select option: " _choice
+      _choice="${_choice:-1}"
+      case "$_choice" in
+        1) _pick_from_pool; return ;;
+        2) _enter_manually; return ;;
+        *) echo "Please enter 1 or 2." ;;
+      esac
+    done
+  else
+    _enter_manually
+  fi
+}
+
+# =============================================================================
+# _build_used_set — populate _USED_SET from all three sources
+# =============================================================================
+
+_build_used_set() {
+  declare -gA _USED_SET=()
+
+  # From easy-rsa issued certificates
+  if [[ -d "$EASYRSA_DIR/pki/issued" ]]; then
+    for _crt in "$EASYRSA_DIR/pki/issued/"*.crt; do
+      [[ -f "$_crt" ]] || continue
+      _name="$(basename "$_crt" .crt)"
+      _USED_SET["$_name"]=1
+    done
+  fi
+
+  # From ocpasswd
+  if [[ -f "$USER_FILE" ]]; then
+    while IFS=: read -r _name _rest; do
+      [[ -n "$_name" ]] && _USED_SET["$_name"]=1
+    done < "$USER_FILE"
+  fi
+
+  # From names_used.txt
+  if [[ -f "$NAMES_USED_FILE" ]]; then
+    while IFS= read -r _name; do
+      _name="${_name//[$'\t\r\n ']}"
+      [[ -n "$_name" && "$_name" != \#* ]] && _USED_SET["$_name"]=1
+    done < "$NAMES_USED_FILE"
+  fi
+}
+
+# =============================================================================
+# _pick_from_pool — pick a random available name from NAMES_FILE
+# =============================================================================
+
+_pick_from_pool() {
+  if [[ ! -f "$NAMES_FILE" ]]; then
+    echo "Warning: name pool file not found: $NAMES_FILE"
+    echo "Falling back to manual entry."
+    _enter_manually
+    return
+  fi
+
+  _build_used_set
+
+  mapfile -t _ALL_NAMES < <(grep -v '^\s*#' "$NAMES_FILE" | grep -v '^\s*$')
+
+  if [[ ${#_ALL_NAMES[@]} -eq 0 ]]; then
+    echo "Warning: name pool file is empty."
+    echo "Falling back to manual entry."
+    _enter_manually
+    return
+  fi
+
+  # Build list of available names; resync stale entries to names_used.txt
+  _AVAILABLE=()
+  for _name in "${_ALL_NAMES[@]}"; do
+    _name="${_name//[$'\t\r\n ']}"
+    if [[ -z "${_USED_SET[$_name]+x}" ]]; then
+      _AVAILABLE+=("$_name")
+    else
+      if ! grep -qxF "$_name" "$NAMES_USED_FILE" 2>/dev/null; then
+        echo "$_name" >> "$NAMES_USED_FILE"
+      fi
+    fi
+  done
+
+  if [[ ${#_AVAILABLE[@]} -eq 0 ]]; then
+    echo "Warning: all names in the pool are already in use."
+    echo "Add more names to: $NAMES_FILE"
+    echo "Falling back to manual entry."
+    _enter_manually
+    return
+  fi
+
+  # Pick a random available name and record it
+  USERNAME="${_AVAILABLE[$RANDOM % ${#_AVAILABLE[@]}]}"
+  mkdir -p "$(dirname "$NAMES_USED_FILE")"
+  echo "$USERNAME" >> "$NAMES_USED_FILE"
+
+  echo "Username: $USERNAME"
+}
+
+# =============================================================================
+# _enter_manually — prompt for a username and validate it
+# =============================================================================
+
+_enter_manually() {
+  _build_used_set
+  while true; do
+    read -rp "Username: " USERNAME
+    if [[ -z "$USERNAME" ]]; then
+      echo "Error: username cannot be empty."
+    elif [[ ! "$USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+      echo "Error: invalid username. Allowed characters: letters, digits, - and _"
+    elif [[ -n "${_USED_SET[$USERNAME]+x}" ]]; then
+      echo "Error: username '$USERNAME' is already taken."
+    else
+      break
+    fi
+  done
+}

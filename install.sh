@@ -9,14 +9,20 @@ set -e
 # Helpers
 # =============================================================================
 
-info()    { echo "  [+] $*"; }
-warn()    { echo "  [!] $*"; }
-error()   { echo "  [x] $*"; exit 1; }
+_GRN="\033[0;32m"
+_YLW="\033[0;33m"
+_RED="\033[0;31m"
+_CYN="\033[0;36m"
+_RST="\033[0m"
+
+info()    { echo -e "  ${_GRN}[+]${_RST} $*"; }
+warn()    { echo -e "  ${_YLW}[!]${_RST} $*"; }
+error()   { echo -e "  ${_RED}[x]${_RST} $*"; exit 1; }
 ask()     { read -rp "      $*" ; }
 confirm() { read -rp "      $* (y/n): " _yn; [[ "$_yn" == "y" ]]; }
 
-divider() { echo "-------------------------------------------"; }
-header()  { echo; echo "==========================================="; echo "  $*"; echo "==========================================="; }
+divider() { echo -e "${_CYN}-------------------------------------------${_RST}"; }
+header()  { echo; echo -e "${_CYN}===========================================${_RST}"; echo -e "  ${_CYN}$*${_RST}"; echo -e "${_CYN}===========================================${_RST}"; }
 
 # =============================================================================
 # Check root
@@ -186,11 +192,20 @@ camouflage_enabled=$(grep -E '^\s*camouflage\s*=\s*true' "$OCSERV_CONF")
 camouflage_secret=$(grep -E '^\s*camouflage_secret\s*=' "$OCSERV_CONF" \
   | grep -oP '(?<=")\w+(?=")' | head -1)
 
+parsed_port=$(grep -E '^\s*tcp-port\s*=' "$OCSERV_CONF" | awk -F'=' '{print $2}' | tr -d ' ' | head -1)
+parsed_port="${parsed_port:-443}"
+
+if [[ "$parsed_port" != "443" ]]; then
+  PORT_SUFFIX=":$parsed_port"
+else
+  PORT_SUFFIX=""
+fi
+
 if [[ -n "$camouflage_enabled" && -n "$camouflage_secret" ]]; then
-  SERVER_URL="https://$SERVER_ADDR/?$camouflage_secret"
+  SERVER_URL="https://$SERVER_ADDR$PORT_SUFFIX/?$camouflage_secret"
   info "Camouflage detected — gateway URL: $SERVER_URL"
 else
-  SERVER_URL="https://$SERVER_ADDR/"
+  SERVER_URL="https://$SERVER_ADDR$PORT_SUFFIX/"
   info "No camouflage — gateway URL: $SERVER_URL"
 fi
 echo
@@ -229,8 +244,8 @@ done
 
 header "Install location"
 
-ask "Install scripts to [$REAL_HOME/bin]: " ; INSTALL_DIR="$REPLY"
-INSTALL_DIR="${INSTALL_DIR:-$REAL_HOME/bin}"
+ask "Install scripts to [$REAL_HOME/bin/ocservice]: " ; INSTALL_DIR="$REPLY"
+INSTALL_DIR="${INSTALL_DIR:-$REAL_HOME/bin/ocservice}"
 
 # =============================================================================
 # Confirm overwrite if config exists
@@ -248,6 +263,7 @@ fi
 
 header "Summary"
 echo "      Install dir:      $INSTALL_DIR"
+echo "      Symlink:          /usr/local/bin/ocservice"
 echo "      ocserv.conf:      $OCSERV_CONF"
 echo "      OCSERV_PREFIX:    $OCSERV_PREFIX"
 echo "      EASYRSA_DIR:      $EASYRSA_DIR"
@@ -271,7 +287,7 @@ header "Installing scripts"
 mkdir -p "$INSTALL_DIR"
 SCRIPT_DIR="$(dirname "$(realpath "$0")")/bin"
 
-for script in ocservice gen-client gen-login user-center; do
+for script in ocservice gen-client gen-login user-center ocnames; do
   if [[ -f "$SCRIPT_DIR/$script" ]]; then
     cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/$script"
     chmod +x "$INSTALL_DIR/$script"
@@ -281,6 +297,36 @@ for script in ocservice gen-client gen-login user-center; do
     warn "Script not found, skipping: $SCRIPT_DIR/$script"
   fi
 done
+
+# Copy name pool file
+REPO_DIR="$(dirname "$(realpath "$0")")"
+if [[ -f "$REPO_DIR/names" ]]; then
+  cp "$REPO_DIR/names" "$INSTALL_DIR/names"
+  chown "$REAL_USER:$REAL_USER" "$INSTALL_DIR/names"
+  info "Installed: $INSTALL_DIR/names"
+else
+  # Create empty pool with instructions
+  cat > "$INSTALL_DIR/names" << 'NAMESEOF'
+# ocservice name pool — one name per line
+# Lines starting with # and empty lines are ignored.
+# Format: Animal-Name (e.g. Narwhal-Yaroslav)
+# Add new names freely — no restart needed.
+NAMESEOF
+  chown "$REAL_USER:$REAL_USER" "$INSTALL_DIR/names"
+  info "Created empty name pool: $INSTALL_DIR/names"
+fi
+
+# =============================================================================
+# Create symlink
+# =============================================================================
+
+header "Creating symlink"
+
+SYMLINK="/usr/local/bin/ocservice"
+# Remove old symlink or file if exists
+rm -f "$SYMLINK"
+ln -sf "$INSTALL_DIR/ocservice" "$SYMLINK"
+info "Symlink: $SYMLINK -> $INSTALL_DIR/ocservice"
 
 # =============================================================================
 # Generate ocservice.conf
@@ -339,6 +385,15 @@ PASSWORD_LENGTH=$PASSWORD_LENGTH
 # =============================================================================
 
 SERVER_NAME=$SERVER_NAME
+
+# =============================================================================
+# Username pool
+# =============================================================================
+
+# Set to "no" to always prompt for manual entry.
+NAMES_ENABLED=yes
+NAMES_FILE=$INSTALL_DIR/names
+NAMES_USED_FILE=$INSTALL_DIR/names_used
 
 # =============================================================================
 # Output template
@@ -431,15 +486,12 @@ fi
 # =============================================================================
 
 header "Installation complete"
-info "Run: $INSTALL_DIR/ocservice"
-if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-  warn "Install directory is not in PATH. Add to ~/.bashrc:"
-  warn "  export PATH=\"$INSTALL_DIR:\$PATH\""
-fi
+info "Run: ocservice"
 echo
 divider
 echo "  To uninstall:"
-echo "    rm $INSTALL_DIR/{ocservice,gen-client,gen-login,user-center,ocservice.conf}"
+echo "    rm -rf $INSTALL_DIR"
+echo "    sudo rm /usr/local/bin/ocservice"
 echo "    sudo rm /etc/sudoers.d/ocservice"
 divider
 echo

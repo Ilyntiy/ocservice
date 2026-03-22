@@ -238,6 +238,7 @@ elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_users[@]}
         fi
         rm -f "$CONFIG_PER_USER/$selected_user"
         echo "[deleted] $(date '+%Y-%m-%d %H:%M') | $selected_user | $selected_type" >> "$USER_HISTORY"
+        sed -i "/^$selected_user$/d" "$NAMES_USED_FILE" 2>/dev/null
         echo "✅ User '$selected_user' deleted."
       else
         echo "Cancelled."

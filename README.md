@@ -13,6 +13,7 @@ A set of bash scripts for managing [ocserv](https://ocserv.openconnect-vpn.net/)
 - Server status block in the main menu (uptime, sessions, RX/TX)
 - Supports `cert`, `plain` and `both` authentication modes
 - Camouflage URL auto-detected from `ocserv.conf` during install
+- Username pool — auto-generate unique names from a customizable list
 
 ---
 
@@ -38,7 +39,8 @@ sudo ./install.sh
 - Parse paths from your existing `ocserv.conf`
 - Ask a few questions (prefix, auth mode, server address)
 - Generate `ocservice.conf` in the install directory
-- Copy scripts to `~/bin/` (or your chosen location)
+- Copy scripts to `~/bin/ocservice/` (or your chosen location)
+- Create a symlink at `/usr/local/bin/ocservice`
 - Set up file permissions and create required directories
 - Create `/etc/sudoers.d/ocservice` with minimal required permissions
 
@@ -46,12 +48,6 @@ After installation, run:
 
 ```bash
 ocservice
-```
-
-If `~/bin` is not in your PATH, add to `~/.bashrc`:
-
-```bash
-export PATH="$HOME/bin:$PATH"
 ```
 
 ---
@@ -65,7 +61,7 @@ Main menu. Shows server status on every screen and provides access to all other 
 Creates a certificate-based VPN user. Generates an easy-rsa client certificate, exports it as a `.p12` file, and writes the result to the user history log.
 
 Prompts:
-- Username
+- Username (pick from pool or enter manually)
 - Certificate validity in days (default: 365)
 - Max simultaneous connections (0 = unlimited)
 
@@ -75,8 +71,11 @@ Prompts:
 Creates a login/password VPN user via `ocpasswd`. Only available when `AUTH_MODE=plain` or `AUTH_MODE=both`.
 
 Prompts:
-- Username
+- Username (pick from pool or enter manually)
 - Max simultaneous connections (0 = unlimited)
+
+### `ocnames`
+Shared helper sourced by `gen-client` and `gen-login`. Handles username selection — picks a random available name from the pool or falls back to manual entry. Tracks issued names in `names_used` and detects duplicates across certificates and `ocpasswd`.
 
 ### `user-center`
 Lists all users with their status, certificate dates, ban points and connection limit. Allows you to view connection details, edit `config-per-user`, kick, unban or delete a user.
@@ -105,6 +104,9 @@ All settings live in `ocservice.conf`, placed in the same directory as the scrip
 | `SERVER_NAME` | Display name, also used as CA name in `.p12` certificates |
 | `SERVER_URL` | Gateway URL shown to new users (include camouflage path if enabled) |
 | `DOCS_URL` | Optional link to docs or Telegram channel |
+| `NAMES_ENABLED` | `yes` to enable username pool, `no` to always prompt manually |
+| `NAMES_FILE` | Path to the name pool file |
+| `NAMES_USED_FILE` | Path to the issued names log (managed automatically) |
 
 See `ocservice.conf.example` for a fully commented template.
 
@@ -147,6 +149,9 @@ crl = /home/user/easy-rsa/pki/crl.pem
 ## Uninstall
 
 ```bash
-rm ~/bin/{ocservice,gen-client,gen-login,user-center,ocservice.conf}
+rm -rf <install_dir>
+sudo rm /usr/local/bin/ocservice
 sudo rm /etc/sudoers.d/ocservice
 ```
+
+Replace `<install_dir>` with your actual install path (default: `~/bin/ocservice`).

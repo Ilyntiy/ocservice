@@ -15,6 +15,13 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 source "$CONFIG"
 
+LIB="$(dirname "$(realpath "$0")")/ocnames"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: ocnames not found: $LIB"
+  exit 1
+fi
+source "$LIB"
+
 # =============================================================================
 # Check auth mode
 # =============================================================================
@@ -30,18 +37,13 @@ mkdir -p "$CONFIG_PER_USER"
 # Username
 # =============================================================================
 
-while true; do
-  read -rp "Username: " USERNAME
-  if [[ -z "$USERNAME" ]]; then
-    echo "Error: username cannot be empty."
-  elif [[ ! "$USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: invalid username. Allowed characters: letters, digits, - and _"
-  elif grep -q "^$USERNAME:" "$USER_FILE" 2>/dev/null; then
-    echo "Error: user '$USERNAME' already exists in $USER_FILE"
-  else
-    break
-  fi
-done
+pick_username
+
+# Guard against duplicate login user (belt-and-suspenders)
+if grep -q "^$USERNAME:" "$USER_FILE" 2>/dev/null; then
+  echo "Error: user '$USERNAME' already exists in $USER_FILE"
+  exit 1
+fi
 
 # =============================================================================
 # Max simultaneous connections

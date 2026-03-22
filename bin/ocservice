@@ -72,6 +72,8 @@ show_menu() {
   echo "  6 — Restart ocserv"
   echo "  7 — Reload configuration"
   echo "  8 — Active connections (occtl)"
+  [[ "${NAMES_ENABLED:-no}" == "yes" ]] && \
+  echo "  9 — Edit name pool"
   echo "  q — Quit"
   echo "==========================================="
   read -rp "Enter action: " ACTION
@@ -131,6 +133,17 @@ while true; do
       echo "========================================"
       read -rp "Press Enter to return to menu..." dummy
       ;;
+    9)
+      if [[ "${NAMES_ENABLED:-no}" != "yes" ]]; then
+        echo "Name pool is disabled (NAMES_ENABLED=no in ocservice.conf)."
+        read -rp "Press Enter to return to menu..." dummy
+      elif [[ ! -f "$NAMES_FILE" ]]; then
+        echo "Name pool file not found: $NAMES_FILE"
+        read -rp "Press Enter to return to menu..." dummy
+      else
+        nano "$NAMES_FILE"
+      fi
+      ;;    
     *)
       echo "Invalid choice."
       read -rp "Press Enter to return to menu..." dummy
