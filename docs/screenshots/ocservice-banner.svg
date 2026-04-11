@@ -1,0 +1,58 @@
+<svg width="680" height="200" viewBox="0 0 680 200" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>ocservice banner</title>
+<desc>Terminal-style banner for ocservice — a bash toolkit for managing ocserv OpenConnect VPN</desc>
+<style>
+  .bg { fill: #0d1117; }
+  .tb { fill: #161b22; }
+  .dot1 { fill: #ff5f57; }
+  .dot2 { fill: #febc2e; }
+  .dot3 { fill: #28c840; }
+  .prompt { fill: #3fb950; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
+  .cmd { fill: #e6edf3; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
+  .kw { fill: #79c0ff; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
+  .str { fill: #a5d6ff; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
+  .grn { fill: #3fb950; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
+  .muted { fill: #8b949e; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13px; }
+  .title { fill: #3fb950; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 22px; font-weight: bold; }
+  .sub { fill: #8b949e; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 12px; }
+  .cursor { fill: #3fb950; }
+</style>
+
+<rect width="680" height="200" rx="10" class="bg"/>
+<rect x="0" y="0" width="680" height="36" rx="10" class="tb"/>
+<rect x="0" y="18" width="680" height="18" class="tb"/>
+
+<circle cx="24" cy="18" r="6" class="dot1"/>
+<circle cx="44" cy="18" r="6" class="dot2"/>
+<circle cx="64" cy="18" r="6" class="dot3"/>
+
+<text x="340" y="23" text-anchor="middle" class="muted">ocservice</text>
+
+<text x="40" y="68" class="prompt">root@vpn</text>
+<text x="103" y="68" class="muted">:</text>
+<text x="112" y="68" class="kw">~/bin/ocservice</text>
+<text x="232" y="68" class="muted">$</text>
+<text x="244" y="68" class="cmd"> ocservice</text>
+
+<text x="40" y="96" class="grn">[+]</text>
+<text x="68" y="96" class="cmd">ocserv </text>
+<text x="116" y="96" class="muted">running ·</text>
+<text x="190" y="96" class="str">uptime 14d</text>
+<text x="280" y="96" class="muted">· sessions</text>
+<text x="356" y="96" class="str">12</text>
+<text x="374" y="96" class="muted">· RX/TX</text>
+<text x="432" y="96" class="str">4.2 GB / 1.1 GB</text>
+
+<text x="40" y="124" class="muted">1  Create certificate user</text>
+<text x="40" y="144" class="muted">2  Create login user</text>
+<text x="40" y="164" class="muted">3  User Management Center</text>
+
+<text x="400" y="124" class="title">ocservice</text>
+<text x="400" y="148" class="sub">manage ocserv VPN users</text>
+<text x="400" y="166" class="sub">cert · plain · both auth modes</text>
+<text x="400" y="184" class="sub">github.com/Ilyntiy/ocservice</text>
+
+<rect x="40" y="176" width="8" height="14" rx="1" class="cursor">
+  <animate attributeName="opacity" values="1;0;1" dur="1.2s" repeatCount="indefinite"/>
+</rect>
+</svg>

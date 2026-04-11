@@ -87,6 +87,18 @@ NAMES_FILE="$(dirname "$(realpath "$0")")/names.txt"
 NAMES_USED_FILE="$(dirname "$(realpath "$0")")/names_used.txt"
 
 # =============================================================================
+# Certificate cache
+# =============================================================================
+
+# Path to the certificate dates cache file.
+# Stores issue and expiry dates for certificate users to avoid reading
+# each .crt file on every User Management Center open.
+# Managed automatically by gen-client and user-center.
+# If you create certificates outside of ocservice, run
+# 'r — Rebuild cache' in User Management Center to update it.
+CERT_CACHE_FILE="$(dirname "$(realpath "$0")")/cert_cache"
+
+# =============================================================================
 # Output template — shown to the client after user creation
 # Edit these to match what you want to send to each new user.
 # =============================================================================

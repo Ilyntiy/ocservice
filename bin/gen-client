@@ -16,6 +16,8 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 source "$CONFIG"
 
+CERT_CACHE_FILE="${CERT_CACHE_FILE:-$(dirname "$(realpath "$0")")/cert_cache}"
+
 LIB="$(dirname "$(realpath "$0")")/ocnames"
 if [[ ! -f "$LIB" ]]; then
   echo "Error: ocnames not found: $LIB"
@@ -99,7 +101,39 @@ openssl pkcs12 -export \
 }
 
 # Write config-per-user only after successful certificate creation
-echo "max-same-clients = $MAX_CONN" > "$CONFIG_PER_USER/$USERNAME"
+cat > "$CONFIG_PER_USER/$USERNAME" << EOF
+# Per-user configuration file for ocserv
+# Uncomment and set options as needed
+
+max-same-clients = $MAX_CONN
+
+## Network
+
+# Assign static IP address (use /30 subnet trick — set odd address, server uses next even)
+# Uncomment both lines together
+# ipv4-network = 10.18.18.0
+# explicit-ipv4 = 10.18.18.X
+
+## Transport
+
+# Disable DTLS, force TCP only (useful for users behind UDP-blocking firewalls)
+# no-udp = false
+
+## Bandwidth
+
+# Bandwidth limits in bytes/sec (0 = unlimited, 1048576 = 8 Mbit/s)
+# rx-data-per-sec = 0
+# tx-data-per-sec = 0
+
+## Timeouts
+
+# Idle timeout in seconds (0 = use global value)
+# idle-timeout = 0
+# mobile-idle-timeout = 0
+
+# Maximum session duration in seconds (0 = unlimited)
+# session-timeout = 0
+EOF
 
 # =============================================================================
 # Read certificate dates
@@ -107,6 +141,11 @@ echo "max-same-clients = $MAX_CONN" > "$CONFIG_PER_USER/$USERNAME"
 
 START=$(openssl x509 -in "$EASYRSA_DIR/pki/issued/$USERNAME.crt" -noout -startdate | cut -d= -f2)
 END=$(openssl x509   -in "$EASYRSA_DIR/pki/issued/$USERNAME.crt" -noout -enddate   | cut -d= -f2)
+
+# Write to certificate cache
+START_FMT=$(date -d "$START" +%Y-%m-%d)
+END_FMT=$(date -d "$END" +%Y-%m-%d)
+echo "$USERNAME|$START_FMT|$END_FMT" >> "$CERT_CACHE_FILE"
 
 # =============================================================================
 # Write to history log

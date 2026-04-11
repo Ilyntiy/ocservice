@@ -1,3 +1,4 @@
+![ocservice](docs/ocservice-banner.svg)
 # ocservice
 
 A set of bash scripts for managing [ocserv](https://ocserv.openconnect-vpn.net/) — the OpenConnect VPN server. Designed for servers where ocserv is built from source and installed to a custom prefix, and [easy-rsa](https://github.com/OpenVPN/easy-rsa) is used for certificate management.
@@ -14,6 +15,8 @@ A set of bash scripts for managing [ocserv](https://ocserv.openconnect-vpn.net/)
 - Supports `cert`, `plain` and `both` authentication modes
 - Camouflage URL auto-detected from `ocserv.conf` during install (port included if non-standard)
 - Username pool — auto-generate unique names from a customizable list
+- Per-user `config-per-user` file created automatically with a commented settings template
+- Certificate date cache — User Management Center loads instantly regardless of user count
 
 ---
 
@@ -52,6 +55,24 @@ ocservice
 
 ---
 
+## Updating
+
+Pull the latest version and re-run the installer:
+
+```bash
+git pull
+sudo ./install.sh
+```
+
+`install.sh` automatically detects an existing installation via the `/usr/local/bin/ocservice` symlink. If found, it skips all configuration questions and goes straight to updating the scripts.
+
+What happens during update:
+- Scripts are always overwritten
+- `ocservice.conf` is patched — only new parameters are added, existing values are preserved
+- Name pool, issued names log, certificate cache and user history are never touched
+
+---
+
 ## Scripts
 
 ### `ocservice`
@@ -65,6 +86,8 @@ Prompts:
 - Certificate validity in days (default: 365)
 - Max simultaneous connections (0 = unlimited)
 
+A `config-per-user` file is created automatically for each new user with a commented template of available per-user settings (static IP, bandwidth limits, timeouts, etc.).
+
 ![Creating a certificate user](docs/screenshots/gen-client.png)
 
 ### `gen-login`
@@ -74,11 +97,15 @@ Prompts:
 - Username (pick from pool or enter manually)
 - Max simultaneous connections (0 = unlimited)
 
+A `config-per-user` file is created automatically for each new user.
+
 ### `ocnames`
 Shared helper sourced by `gen-client` and `gen-login`. Handles username selection — picks a random available name from the pool or falls back to manual entry. Tracks issued names in `names_used` and detects duplicates across certificates and `ocpasswd`.
 
 ### `user-center`
 Lists all users with their status, certificate dates, ban points and connection limit. Allows you to view connection details, edit `config-per-user`, kick, unban or delete a user.
+
+Use `r — Rebuild certificate cache` to reinitialize the certificate date cache. This is required after the first install if you already had certificate users, or if you ever create or revoke certificates outside of ocservice.
 
 ![User Management Center](docs/screenshots/user-center.png)
 
@@ -107,6 +134,7 @@ All settings live in `ocservice.conf`, placed in the same directory as the scrip
 | `NAMES_ENABLED` | `yes` to enable username pool, `no` to always prompt manually |
 | `NAMES_FILE` | Path to the name pool file |
 | `NAMES_USED_FILE` | Path to the issued names log (managed automatically) |
+| `CERT_CACHE_FILE` | Path to the certificate date cache (managed automatically) |
 
 See `ocservice.conf.example` for a fully commented template.
 
@@ -135,6 +163,12 @@ If your easy-rsa CA was created with a password, you will be prompted to enter i
 | `both` | `auth = "plain[passwd=...]"` + `enable-auth = "certificate"` |
 
 Setting `AUTH_MODE` incorrectly will hide menu items or show errors when creating users.
+
+### Certificate cache
+
+User Management Center reads certificate dates from a local cache file (`cert_cache`) instead of calling `openssl` for every user on each open. The cache is updated automatically when you create or delete users through ocservice.
+
+If you ever create or revoke certificates manually (outside of ocservice), run `r — Rebuild certificate cache` in User Management Center to bring the cache back in sync.
 
 ### CRL
 

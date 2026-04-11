@@ -15,6 +15,8 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 source "$CONFIG"
 
+CERT_CACHE_FILE="${CERT_CACHE_FILE:-$(dirname "$(realpath "$0")")/cert_cache}"
+
 # =============================================================================
 # Collect online sessions and ban points
 # =============================================================================
@@ -40,13 +42,12 @@ done < <(sudo "$OCCTL" show ip ban points 2>/dev/null)
 
 get_cert_info() {
   local user=$1
-  local crt_file="$EASYRSA_DIR/pki/issued/$user.crt"
-
-  if [[ -f "$crt_file" ]]; then
-    local raw start_date end_date end_epoch now_epoch left_days
-    raw=$(openssl x509 -in "$crt_file" -noout -startdate -enddate 2>/dev/null)
-    start_date=$(grep notBefore <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
-    end_date=$(grep notAfter  <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
+  local cached
+  cached=$(grep "^$user|" "$CERT_CACHE_FILE" 2>/dev/null)
+  if [[ -n "$cached" ]]; then
+    local start_date end_date end_epoch now_epoch left_days
+    start_date=$(cut -d'|' -f2 <<< "$cached")
+    end_date=$(cut -d'|' -f3 <<< "$cached")
     end_epoch=$(date -d "$end_date" +%s)
     now_epoch=$(date +%s)
     left_days=$(( (end_epoch - now_epoch) / 86400 ))
@@ -63,10 +64,28 @@ is_online() {
 get_max_sessions() {
   local user=$1
   if [[ -f "$CONFIG_PER_USER/$user" ]]; then
-    grep '^max-same-clients' "$CONFIG_PER_USER/$user" | awk '{print $3}'
+    local val
+    val=$(grep '^max-same-clients' "$CONFIG_PER_USER/$user" | awk '{print $3}')
+    echo "${val:--}"
   else
     echo "-"
   fi
+}
+
+rebuild_cert_cache() {
+  echo -n "Rebuilding certificate cache..."
+  > "$CERT_CACHE_FILE"
+  while read -r user; do
+    [[ -z "$user" ]] && continue
+    local crt_file="$EASYRSA_DIR/pki/issued/$user.crt"
+    [[ ! -f "$crt_file" ]] && continue
+    local raw start_date end_date
+    raw=$(openssl x509 -in "$crt_file" -noout -startdate -enddate 2>/dev/null)
+    start_date=$(grep notBefore <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
+    end_date=$(grep notAfter   <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
+    echo "$user|$start_date|$end_date" >> "$CERT_CACHE_FILE"
+  done < <(grep '^V' "$EASYRSA_DIR/pki/index.txt" | sed -n 's|.*CN=\(.*\)|\1|p' | sort)
+  echo " done."
 }
 
 # =============================================================================
@@ -180,9 +199,10 @@ else
 fi
 
 echo "  0 — View user-history.log"
+echo "  r — Rebuild certificate cache"
 echo "  q — Quit"
 echo
-read -rp "Select user by number (or 0/q): " choice
+read -rp "Select user by number (or 0/r/q): " choice
 
 # =============================================================================
 # Handle choice
@@ -190,6 +210,10 @@ read -rp "Select user by number (or 0/q): " choice
 
 if [[ "$choice" == "q" ]]; then
   exit 0
+elif [[ "$choice" == "r" ]]; then
+  rebuild_cert_cache
+  read -rp "Press Enter to continue..."
+  exec "$0"
 elif [[ "$choice" == "0" ]]; then
   echo "=========== User action log ==========="
   cat "$USER_HISTORY" 2>/dev/null || echo "(empty)"
@@ -237,6 +261,7 @@ elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_users[@]}
           "$OCPASSWD" -d -c "$USER_FILE" "$selected_user"
         fi
         rm -f "$CONFIG_PER_USER/$selected_user"
+        sed -i "/^$selected_user|/d" "$CERT_CACHE_FILE" 2>/dev/null
         echo "[deleted] $(date '+%Y-%m-%d %H:%M') | $selected_user | $selected_type" >> "$USER_HISTORY"
         sed -i "/^$selected_user$/d" "$NAMES_USED_FILE" 2>/dev/null
         echo "✅ User '$selected_user' deleted."
