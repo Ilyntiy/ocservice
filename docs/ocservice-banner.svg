@@ -1,4 +1,4 @@
-<svg width="680" height="200" viewBox="0 0 680 200" role="img" xmlns="http://www.w3.org/2000/svg">
+<svg width="100%" viewBox="0 0 680 200" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>ocservice banner</title>
 <desc>Terminal-style banner for ocservice — a bash toolkit for managing ocserv OpenConnect VPN</desc>
 <style>
