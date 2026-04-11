@@ -79,6 +79,8 @@ What happens during update:
 ### `ocservice`
 Main menu. Shows server status on every screen and provides access to all other scripts.
 
+![Main menu](docs/screenshots/ocservice-menu.png)
+
 ### `gen-client`
 Creates a certificate-based VPN user. Generates an easy-rsa client certificate, exports it as a `.p12` file, and writes the result to the user history log.
 
