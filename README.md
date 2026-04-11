@@ -1,6 +1,7 @@
 <p align="center">
   <img src="docs/ocservice-banner.svg" width="100%">
 </p>
+
 # ocservice
 
 A set of bash scripts for managing [ocserv](https://ocserv.openconnect-vpn.net/) — the OpenConnect VPN server. Designed for servers where ocserv is built from source and installed to a custom prefix, and [easy-rsa](https://github.com/OpenVPN/easy-rsa) is used for certificate management.
