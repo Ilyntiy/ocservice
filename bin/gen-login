@@ -71,39 +71,7 @@ printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" | "$OCPASSWD" -c "$USER_FILE" "$USERNA
 }
 
 # Write config-per-user only after successful user creation
-cat > "$CONFIG_PER_USER/$USERNAME" << EOF
-# Per-user configuration file for ocserv
-# Uncomment and set options as needed
-
-max-same-clients = $MAX_CONN
-
-## Network
-
-# Assign static IP address (use /30 subnet trick — set odd address, server uses next even)
-# Uncomment both lines together
-# ipv4-network = 10.18.18.0
-# explicit-ipv4 = 10.18.18.X
-
-## Transport
-
-# Disable DTLS, force TCP only (useful for users behind UDP-blocking firewalls)
-# no-udp = false
-
-## Bandwidth
-
-# Bandwidth limits in bytes/sec (0 = unlimited, 1048576 = 8 Mbit/s)
-# rx-data-per-sec = 0
-# tx-data-per-sec = 0
-
-## Timeouts
-
-# Idle timeout in seconds (0 = use global value)
-# idle-timeout = 0
-# mobile-idle-timeout = 0
-
-# Maximum session duration in seconds (0 = unlimited)
-# session-timeout = 0
-EOF
+write_config_per_user "$USERNAME" "$MAX_CONN"
 
 # =============================================================================
 # Write to history log
@@ -117,11 +85,11 @@ echo "[login-created] $(date '+%Y-%m-%d %H:%M') | $USERNAME" >> "$USER_HISTORY"
 
 echo
 echo "================================================"
-echo "  Username:        $USERNAME"
-echo "  Password:        $PASSWORD"
-echo "  Max connections: $MAX_CONN" "(0 = unlimited)"
-echo "  Gateway:         $SERVER_URL"
-[[ -n "$DOCS_URL" ]] && echo "  Docs / channel:  $DOCS_URL"
+echo "👤 Username:        $USERNAME"
+echo "🔑 Password:        $PASSWORD"
+echo "🔢 Max connections: $MAX_CONN" "(0 = unlimited)"
+echo "🌐 Gateway:         $SERVER_URL"
+[[ -n "$DOCS_URL" ]] && echo "📘 Docs / channel:  $DOCS_URL"
 echo "================================================"
 echo
 

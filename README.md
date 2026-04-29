@@ -11,8 +11,9 @@ A set of bash scripts for managing [ocserv](https://ocserv.openconnect-vpn.net/)
 - Create certificate-based VPN users (easy-rsa + .p12 export)
 - Create login/password VPN users
 - User Management Center — view all users, certificate expiry, ban points, online status
-- Kick users and reset ban points
-- Server status block in the main menu (uptime, sessions, RX/TX)
+- Kick users with session cookie invalidation (ocserv 1.4.2+) and reset ban points
+- Server status block in the main menu — uptime, sessions, RX/TX, CPU load, memory usage, server certificate expiry with color indicators
+- Certificate days remaining highlighted by color in User Management Center
 - Supports `cert`, `plain` and `both` authentication modes
 - Camouflage URL auto-detected from `ocserv.conf` during install (port included if non-standard)
 - Username pool — auto-generate unique names from a customizable list
@@ -77,7 +78,7 @@ What happens during update:
 ## Scripts
 
 ### `ocservice`
-Main menu. Shows server status on every screen and provides access to all other scripts.
+Main menu. Shows server status on every screen — ocserv uptime, sessions, RX/TX, system load, memory usage and server certificate expiry with color indicators (green / yellow at 30 days / red at 10 days).
 
 ![Main menu](docs/screenshots/ocservice-menu.png)
 
@@ -138,6 +139,7 @@ All settings live in `ocservice.conf`, placed in the same directory as the scrip
 | `NAMES_FILE` | Path to the name pool file |
 | `NAMES_USED_FILE` | Path to the issued names log (managed automatically) |
 | `CERT_CACHE_FILE` | Path to the certificate date cache (managed automatically) |
+| `SERVER_CERT` | Path to server TLS certificate file — used to display expiry in the main menu |
 
 See `ocservice.conf.example` for a fully commented template.
 
@@ -172,6 +174,12 @@ Setting `AUTH_MODE` incorrectly will hide menu items or show errors when creatin
 User Management Center reads certificate dates from a local cache file (`cert_cache`) instead of calling `openssl` for every user on each open. The cache is updated automatically when you create or delete users through ocservice.
 
 If you ever create or revoke certificates manually (outside of ocservice), run `r — Rebuild certificate cache` in User Management Center to bring the cache back in sync.
+
+### Server certificate expiry
+
+The main menu displays the server TLS certificate expiry date, read from the file specified in `SERVER_CERT` in `ocservice.conf`. The value is parsed automatically from `ocserv.conf` during installation.
+
+If the main menu shows `n/a` for server cert, check that `SERVER_CERT` is set correctly in `ocservice.conf`. Re-running `install.sh` will fix it automatically.
 
 ### CRL
 

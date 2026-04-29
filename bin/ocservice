@@ -18,9 +18,35 @@ source "$CONFIG"
 
 mkdir -p "$VPN_CLIENTS_DIR" "$CONFIG_PER_USER"
 
+_GRN="\033[0;32m"
+_YLW="\033[0;33m"
+_RED="\033[0;31m"
+_RST="\033[0m"
+
 # =============================================================================
 # Server status block
 # =============================================================================
+
+get_cert_expiry() {
+  [[ -z "$SERVER_CERT" ]] && { echo "n/a"; return; }
+
+  local raw
+  raw=$(openssl x509 -enddate -noout -in "$SERVER_CERT" 2>/dev/null \
+    || sudo openssl x509 -enddate -noout -in "$SERVER_CERT" 2>/dev/null)
+  [[ -z "$raw" ]] && { echo "n/a"; return; }
+
+  local expiry_date days_left
+  expiry_date=$(date -d "$(echo "$raw" | cut -d= -f2)" '+%Y-%m-%d')
+  days_left=$(( ( $(date -d "$expiry_date" +%s) - $(date +%s) ) / 86400 ))
+
+  local color
+  if   (( days_left <= 10 )); then color="$_RED"
+  elif (( days_left <= 30 )); then color="$_YLW"
+  else                              color="$_GRN"
+  fi
+
+  echo -e "${color}expires in ${days_left} days (${expiry_date})${_RST}"
+}
 
 get_status_block() {
   local raw
@@ -38,6 +64,18 @@ get_status_block() {
 
   [[ "$status" == "online" ]] && status="🟢 online" || status="🔴 $status"
 
+  local la1 la2 la3
+  read -r la1 la2 la3 _ < /proc/loadavg
+
+  local mem_total mem_available mem_used mem_used_gb mem_total_gb
+  mem_total=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+  mem_available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+  mem_used=$(( mem_total - mem_available ))
+  mem_used_gb=$(awk "BEGIN {printf \"%.1f\", $mem_used/1048576}")
+  mem_total_gb=$(awk "BEGIN {printf \"%.1f\", $mem_total/1048576}")
+  echo "  ⚙️  Load:             $la1 / $la2 / $la3"
+  echo "  💾 Memory:           ${mem_used_gb} GB / ${mem_total_gb} GB"
+  echo "  -------------------------------------------"
   echo "  Status:              $status"
   echo "  ⏱  Uptime:           $uptime"
   echo "  👥 Active sessions:  $active"
@@ -46,6 +84,8 @@ get_status_block() {
   echo "  🚫 Banned IPs:       $banned"
   echo "  📥 RX:               $rx"
   echo "  📤 TX:               $tx"
+  echo "  🔐 Server cert:      $(get_cert_expiry)"
+
 }
 
 # =============================================================================

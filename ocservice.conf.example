@@ -68,6 +68,16 @@ PASSWORD_LENGTH=20
 SERVER_NAME=MyVPN
 
 # =============================================================================
+# Server certificate
+# =============================================================================
+
+# Path to the server TLS certificate file (server-cert directive in ocserv.conf).
+# Used to display certificate expiry with color indicators in the main menu.
+# Parsed automatically from ocserv.conf by install.sh.
+# If the main menu shows n/a, check this value and re-run install.sh to fix it.
+SERVER_CERT=/path/to/server-cert.pem
+
+# =============================================================================
 # Username pool
 # =============================================================================
 

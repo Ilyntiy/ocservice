@@ -15,7 +15,21 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 source "$CONFIG"
 
+LIB="$(dirname "$(realpath "$0")")/ocnames"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: ocnames not found: $LIB"
+  exit 1
+fi
+source "$LIB"
+
 CERT_CACHE_FILE="${CERT_CACHE_FILE:-$(dirname "$(realpath "$0")")/cert_cache}"
+
+_OCSERV_VERSION=$(sudo "$OCCTL" --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+
+_GRN="\033[0;32m"
+_YLW="\033[0;33m"
+_RED="\033[0;31m"
+_RST="\033[0m"
 
 # =============================================================================
 # Collect online sessions and ban points
@@ -35,6 +49,15 @@ declare -A ban_map
 while read -r ip score; do
   [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ban_map["$ip"]="$score"
 done < <(sudo "$OCCTL" show ip ban points 2>/dev/null)
+
+# Preload max-same-clients from all config-per-user files
+declare -A _MAX_SESSIONS_MAP
+for _f in "$CONFIG_PER_USER"/*; do
+  [[ -f "$_f" ]] || continue
+  _u="$(basename "$_f")"
+  _v=$(grep '^max-same-clients' "$_f" | awk '{print $3}')
+  _MAX_SESSIONS_MAP["$_u"]="${_v:--}"
+done
 
 # =============================================================================
 # Helper functions
@@ -62,14 +85,7 @@ is_online() {
 }
 
 get_max_sessions() {
-  local user=$1
-  if [[ -f "$CONFIG_PER_USER/$user" ]]; then
-    local val
-    val=$(grep '^max-same-clients' "$CONFIG_PER_USER/$user" | awk '{print $3}')
-    echo "${val:--}"
-  else
-    echo "-"
-  fi
+  echo "${_MAX_SESSIONS_MAP[$1]:--}"
 }
 
 rebuild_cert_cache() {
@@ -84,6 +100,7 @@ rebuild_cert_cache() {
     start_date=$(grep notBefore <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
     end_date=$(grep notAfter   <<< "$raw" | cut -d= -f2 | xargs -I{} date -d "{}" +%Y-%m-%d)
     echo "$user|$start_date|$end_date" >> "$CERT_CACHE_FILE"
+    [[ ! -f "$CONFIG_PER_USER/$user" ]] && write_config_per_user "$user"
   done < <(grep '^V' "$EASYRSA_DIR/pki/index.txt" | sed -n 's|.*CN=\(.*\)|\1|p' | sort)
   echo " done."
 }
@@ -123,6 +140,13 @@ if [[ "$AUTH_MODE" != "plain" ]]; then
 
     cert_info=$(get_cert_info "$user")
     IFS='|' read -r start end left <<< "$cert_info"
+    left_fmt=$(printf "%-4s" "$left")
+    if [[ "$left" =~ ^-?[0-9]+$ ]]; then
+      if   (( left <= 10 )); then left_fmt="${_RED}${left_fmt}${_RST}"
+      elif (( left <= 30 )); then left_fmt="${_YLW}${left_fmt}${_RST}"
+      else                        left_fmt="${_GRN}${left_fmt}${_RST}"
+      fi
+    fi
     max_sessions=$(get_max_sessions "$user")
     online_status=$(is_online "$user")
     user_ip="${user_ip_map[$user]}"
@@ -131,8 +155,8 @@ if [[ "$AUTH_MODE" != "plain" ]]; then
     [[ "$ban_pts" -ge 80 ]] && display_name="$user 🚫"
     [[ "$ban_pts" -eq 0 ]] && ban_pts="-"
 
-    table_output+=$(printf "%-3s %-2s %-27s │ %-4s │ %-10s │ %-10s │ %-4s │ %-3s\n" \
-      "$index" "$online_status" "$display_name" "$ban_pts" "$start" "$end" "$left" "$max_sessions")
+    table_output+=$(printf "%-3s %-2s %-27s │ %-4s │ %-10s │ %-10s │ %s │ %-3s\n" \
+      "$index" "$online_status" "$display_name" "$ban_pts" "$start" "$end" "$left_fmt" "$max_sessions")
     table_output+=$'\n'
     index=$((index+1))
   done <<< "$cert_users"
@@ -190,7 +214,7 @@ else
   echo "-----------------------------------------------------------------------------------------------"
 fi
 
-echo "$table_output"
+echo -e "$table_output"
 
 if [[ "$AUTH_MODE" == "plain" ]]; then
   echo "------------------------------------------------------------"
@@ -237,8 +261,13 @@ elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_users[@]}
   echo "🔧 Actions for: $selected_user"
   echo "  1 — Edit config (config-per-user)"
   echo "  2 — Delete user"
-  [[ -n "$selected_ip" ]] && \
-  echo "  3 — Kick user (IP: $selected_ip)"
+  if [[ -n "$selected_ip" ]]; then
+    if [[ "$(printf '%s\n' "1.4.2" "$_OCSERV_VERSION" | sort -V | head -1)" == "1.4.2" ]]; then
+      echo "  3 — Kick user + invalidate session (IP: $selected_ip)"
+    else
+      echo "  3 — Kick user (IP: $selected_ip) ⚠️  upgrade ocserv to 1.4.2 for full kick"
+    fi
+  fi
   [[ -n "$selected_ip" && "$selected_ban" -gt 0 ]] && \
   echo "  4 — Reset ban points (current: $selected_ban, IP: $selected_ip)"
   echo "  0 — Back"
@@ -275,7 +304,11 @@ elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_users[@]}
       else
         read -rp "Kick '$selected_user'? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then
-          sudo "$OCCTL" disconnect user "$selected_user"
+          if [[ "$(printf '%s\n' "1.4.2" "$_OCSERV_VERSION" | sort -V | head -1)" == "1.4.2" ]]; then
+            sudo "$OCCTL" terminate user "$selected_user"
+          else
+            sudo "$OCCTL" disconnect user "$selected_user"
+          fi
           echo "[kicked] $(date '+%Y-%m-%d %H:%M') | $selected_user" >> "$USER_HISTORY"
           echo "✅ $selected_user disconnected."
         else

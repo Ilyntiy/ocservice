@@ -60,6 +60,9 @@ if [[ -n "$CONF_FILE" ]]; then
   echo
   confirm "Update ocservice at $INSTALL_DIR?" || exit 0
   source "$CONF_FILE"
+  # Parse server-cert from ocserv.conf for patch operations
+  parsed_server_cert=$(grep -E '^\s*server-cert\s*=' "$OCSERV_CONF" \
+    | awk -F'=' '{print $2}' | tr -d ' ' | head -1)
 else
 
 # =============================================================================
@@ -109,6 +112,10 @@ parsed_user_file=$(grep -E '^\s*auth\s*=.*plain\[passwd=' "$OCSERV_CONF" \
 
 # Parse CONFIG_PER_USER
 parsed_config_per_user=$(grep -E '^\s*config-per-user\s*=' "$OCSERV_CONF" \
+  | awk -F'=' '{print $2}' | tr -d ' ' | head -1)
+
+# Parse SERVER_CERT
+parsed_server_cert=$(grep -E '^\s*server-cert\s*=' "$OCSERV_CONF" \
   | awk -F'=' '{print $2}' | tr -d ' ' | head -1)
 
 # =============================================================================
@@ -378,6 +385,46 @@ if [[ -f "$CONF_FILE" ]]; then
   else
     info "CERT_CACHE_FILE already present — skipped"
   fi
+
+  if ! grep -q "^SERVER_CERT" "$CONF_FILE"; then
+    {
+      echo ""
+      echo "# ============================================================================="
+      echo "# Server certificate"
+      echo "# ============================================================================="
+      echo ""
+      echo "# Path to the server TLS certificate file (server-cert directive in ocserv.conf)"
+      echo "# Used to display certificate expiry in the main menu."
+      echo "SERVER_CERT=${parsed_server_cert:-$SERVER_CERT}"
+    } >> "$CONF_FILE"
+    info "Added: SERVER_CERT"
+  else
+    info "SERVER_CERT already present — skipped"
+  fi
+
+# Fix empty SERVER_CERT if parsed value is now available
+  if [[ -n "$parsed_server_cert" ]]; then
+    sed -i "s|^SERVER_CERT=\$|SERVER_CERT=$parsed_server_cert|" "$CONF_FILE"
+    info "Updated: SERVER_CERT"
+  fi
+
+  # Strip trailing slashes from OCSERV_PREFIX and EASYRSA_DIR
+  sed -i 's|^\(OCSERV_PREFIX=.*\)/$|\1|' "$CONF_FILE"
+  sed -i 's|^\(EASYRSA_DIR=.*\)/$|\1|' "$CONF_FILE"
+  info "Trailing slashes stripped from OCSERV_PREFIX and EASYRSA_DIR"
+  # Patch sudoers — add openssl line if missing
+  SUDOERS_FILE="/etc/sudoers.d/ocservice"
+  _cert="${parsed_server_cert:-$SERVER_CERT}"
+  if [[ -n "$_cert" ]] && ! grep -q "openssl" "$SUDOERS_FILE" 2>/dev/null; then
+    echo "$REAL_USER ALL=(ALL) NOPASSWD: /usr/bin/openssl x509 -enddate -noout -in $_cert" >> "$SUDOERS_FILE"
+    if visudo -c -f "$SUDOERS_FILE" &>/dev/null; then
+      info "Added openssl to sudoers"
+    else
+      warn "sudoers validation failed after patching — check $SUDOERS_FILE manually"
+    fi
+  else
+    info "openssl sudoers entry already present — skipped"
+  fi
 else
   cat > "$CONF_FILE" << EOF
 # ocservice.conf — ocserv-tools configuration
@@ -432,6 +479,14 @@ PASSWORD_LENGTH=$PASSWORD_LENGTH
 SERVER_NAME=$SERVER_NAME
 
 # =============================================================================
+# Server certificate
+# =============================================================================
+
+# Path to the server TLS certificate file (server-cert directive in ocserv.conf)
+# Used to display certificate expiry in the main menu.
+SERVER_CERT=$parsed_server_cert
+
+# =============================================================================
 # Username pool
 # =============================================================================
 
@@ -481,7 +536,7 @@ chmod 755 "$VPN_CLIENTS_DIR"
 info "vpn-clients: $VPN_CLIENTS_DIR"
 
 # user-history.log
-HISTORY_FILE="$OCSERV_PREFIX/user-history.log"
+HISTORY_FILE="${OCSERV_PREFIX%/}/user-history.log"
 if [[ ! -f "$HISTORY_FILE" ]]; then
   touch "$HISTORY_FILE"
 fi
@@ -532,6 +587,7 @@ $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart ocserv
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl reload ocserv
 $REAL_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart ocserv
 $REAL_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload ocserv
+$([ -n "${parsed_server_cert:-$SERVER_CERT}" ] && echo "$REAL_USER ALL=(ALL) NOPASSWD: /usr/bin/openssl x509 -enddate -noout -in ${parsed_server_cert:-$SERVER_CERT}")
 EOF
 
 chmod 440 "$SUDOERS_FILE"
