@@ -1,81 +1,84 @@
 #!/bin/bash
+# ocservice — ocserv admin menu — https://github.com/Ilyntiy/ocservice
 
-# ocservice — main menu for ocserv administration
-# Part of ocservice — https://github.com/Ilyntiy/ocservice
+DIR=$(dirname "$(realpath "$0")")
+[[ -f $DIR/ocservice.conf ]] || { echo "Error: $DIR/ocservice.conf not found. Run install.sh first."; exit 1; }
+# shellcheck source=/dev/null
+source "$DIR/ocservice.conf"
 
-# =============================================================================
-# Load config
-# =============================================================================
+EDITOR_CMD=${VISUAL:-${EDITOR:-$(command -v nano || command -v vi)}}
+G=$'\033[0;32m'; Y=$'\033[0;33m'; R=$'\033[0;31m'; N=$'\033[0m'
 
-SCRIPTS_DIR="$(dirname "$(realpath "$0")")"
-CONFIG="$SCRIPTS_DIR/ocservice.conf"
-if [[ ! -f "$CONFIG" ]]; then
-  echo "Error: config file not found: $CONFIG"
-  echo "Run install.sh first or create ocservice.conf manually."
-  exit 1
-fi
-source "$CONFIG"
+occtl() { sudo -n "$OCCTL" -n "$@"; }
+pause() { read -rp "Press Enter to return to menu..." _; }
 
-mkdir -p "$VPN_CLIENTS_DIR" "$CONFIG_PER_USER"
-
-_GRN="\033[0;32m"
-_YLW="\033[0;33m"
-_RED="\033[0;31m"
-_RST="\033[0m"
-
-# =============================================================================
-# Server status block
-# =============================================================================
-
-get_cert_expiry() {
-  [[ -z "$SERVER_CERT" ]] && { echo "n/a"; return; }
-
-  local raw
-  raw=$(openssl x509 -enddate -noout -in "$SERVER_CERT" 2>/dev/null \
-    || sudo openssl x509 -enddate -noout -in "$SERVER_CERT" 2>/dev/null)
-  [[ -z "$raw" ]] && { echo "n/a"; return; }
-
-  local expiry_date days_left
-  expiry_date=$(date -d "$(echo "$raw" | cut -d= -f2)" '+%Y-%m-%d')
-  days_left=$(( ( $(date -d "$expiry_date" +%s) - $(date +%s) ) / 86400 ))
-
-  local color
-  if   (( days_left <= 10 )); then color="$_RED"
-  elif (( days_left <= 30 )); then color="$_YLW"
-  else                              color="$_GRN"
+openssl_read() {
+  local file=$1
+  shift
+  if [[ -r $file ]]; then
+    "$OPENSSL" "$@" -in "$file" 2>/dev/null
+  else
+    sudo -n "$OPENSSL" "$@" -in "$file" 2>/dev/null
   fi
-
-  echo -e "${color}expires in ${days_left} days (${expiry_date})${_RST}"
 }
 
-get_status_block() {
+expiry() {
+  local end days color
+  end=$(date -d "$1" +%Y-%m-%d 2>/dev/null) || { echo "n/a"; return 1; }
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+  if   (( days <= 10 )); then color=$R
+  elif (( days <= 30 )); then color=$Y
+  else                        color=$G
+  fi
+  printf '%sexpires in %s days (%s)%s' "$color" "$days" "$end" "$N"
+  (( days > 30 ))
+}
+
+cert_line() {
   local raw
-  raw=$(sudo "$OCCTL" show status 2>/dev/null)
+  [[ -n $SERVER_CERT ]] && raw=$(openssl_read "$SERVER_CERT" x509 -enddate -noout)
+  if [[ -n $raw ]]; then expiry "${raw#*=}"; else echo "n/a"; fi
+  echo
+}
 
-  local status uptime active total failures banned rx tx
-  status=$(echo "$raw"   | awk -F': ' '/^\s*Status:/                     {print $2}')
-  uptime=$(echo "$raw"   | grep 'Up since:' | grep -oP '\(\s*\K[^)]+')
-  active=$(echo "$raw"   | awk -F': '  '/Active sessions:/               {print $2}')
-  total=$(echo "$raw"    | awk -F': '  '/Total sessions:/                {print $2}')
-  failures=$(echo "$raw" | awk -F': '  '/Total authentication failures:/ {print $2}')
-  banned=$(echo "$raw"   | awk -F': '  '/IPs in ban list:/               {print $2}')
-  rx=$(echo "$raw"       | awk -F': '  '/^\s*RX:/                        {print $2}')
-  tx=$(echo "$raw"       | awk -F': '  '/^\s*TX:/                        {print $2}')
+crl_line() {
+  local raw
+  if [[ -z ${CRL_FILE:-} ]]; then
+    echo "${R}not configured — revoked certificates are accepted${N}"
+    return
+  fi
+  raw=$(openssl_read "$CRL_FILE" crl -nextupdate -noout)
+  raw=${raw#*=}
+  if [[ -z $raw ]]; then echo "n/a"; return; fi
+  if [[ $raw == NONE ]]; then echo "no expiry"; return; fi
+  if ! expiry "$raw"; then
+    echo
+    echo "                       renew: cd $EASYRSA_DIR && ./easyrsa gen-crl, then 7 — Reload"
+  else
+    echo
+  fi
+}
 
-  [[ "$status" == "online" ]] && status="🟢 online" || status="🔴 $status"
+status_block() {
+  local raw status uptime active total failures banned rx tx la1 la2 la3 mem_total mem_avail
+  raw=$(occtl show status 2>/dev/null)
+  status=$(awk -F': ' '/^[[:space:]]*Status:/ {print $2}' <<< "$raw")
+  uptime=$(grep 'Up since:' <<< "$raw" | sed -nE 's/.*\(\s*([^)]+)\).*/\1/p')
+  active=$(awk -F': ' '/Active sessions:/ {print $2}' <<< "$raw")
+  total=$(awk -F': ' '/Total sessions:/ {print $2}' <<< "$raw")
+  failures=$(awk -F': ' '/Total authentication failures:/ {print $2}' <<< "$raw")
+  banned=$(awk -F': ' '/IPs in ban list:/ {print $2}' <<< "$raw")
+  rx=$(awk -F': ' '/^[[:space:]]*RX:/ {print $2}' <<< "$raw")
+  tx=$(awk -F': ' '/^[[:space:]]*TX:/ {print $2}' <<< "$raw")
+  if [[ $status == online ]]; then status="🟢 online"; else status="🔴 ${status:-unavailable}"; fi
 
-  local la1 la2 la3
   read -r la1 la2 la3 _ < /proc/loadavg
+  mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+  mem_avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
 
-  local mem_total mem_available mem_used mem_used_gb mem_total_gb
-  mem_total=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
-  mem_available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
-  mem_used=$(( mem_total - mem_available ))
-  mem_used_gb=$(awk "BEGIN {printf \"%.1f\", $mem_used/1048576}")
-  mem_total_gb=$(awk "BEGIN {printf \"%.1f\", $mem_total/1048576}")
   echo "  ⚙️  Load:             $la1 / $la2 / $la3"
-  echo "  💾 Memory:           ${mem_used_gb} GB / ${mem_total_gb} GB"
-  echo "  -------------------------------------------"
+  awk -v u=$((mem_total - mem_avail)) -v t="$mem_total" 'BEGIN {printf "  💾 Memory:           %.1f GB / %.1f GB\n", u/1048576, t/1048576}'
+  echo "  -----------------------------------------"
   echo "  Status:              $status"
   echo "  ⏱  Uptime:           $uptime"
   echo "  👥 Active sessions:  $active"
@@ -84,36 +87,29 @@ get_status_block() {
   echo "  🚫 Banned IPs:       $banned"
   echo "  📥 RX:               $rx"
   echo "  📤 TX:               $tx"
-  echo "  🔐 Server cert:      $(get_cert_expiry)"
-
+  echo "  🔐 Server cert:      $(cert_line)"
+  [[ $AUTH_MODE != plain ]] && echo "  📜 CRL:              $(crl_line)"
 }
-
-# =============================================================================
-# Main menu
-# =============================================================================
 
 show_menu() {
   clear
   echo "==========================================="
   echo "       🔐 $SERVER_NAME — ocserv Tool"
   echo "==========================================="
-  get_status_block
+  status_block
   echo "==========================================="
   echo "📋 Users:"
-  [[ "$AUTH_MODE" != "plain" ]] && \
-  echo "  1 — Create certificate user"
-  [[ "$AUTH_MODE" != "cert"  ]] && \
-  echo "  2 — Create login/password user"
+  [[ $AUTH_MODE != plain ]] && echo "  1 — Create certificate user"
+  [[ $AUTH_MODE != cert  ]] && echo "  2 — Create login/password user"
   echo "  3 — User Management Center"
   echo "-------------------------------------------"
   echo "⚙️  Service:"
   echo "  4 — View ocserv log"
-  echo "  5 — Open config file"
+  echo "  5 — Edit ocserv.conf (sudo password required)"
   echo "  6 — Restart ocserv"
   echo "  7 — Reload configuration"
-  echo "  8 — Active connections (occtl)"
-  [[ "${NAMES_ENABLED:-no}" == "yes" ]] && \
-  echo "  9 — Edit name pool"
+  echo "  8 — Active connections"
+  [[ $NAMES_ENABLED == yes ]] && echo "  9 — Edit name pool"
   echo "  q — Quit"
   echo "==========================================="
   read -rp "Enter action: " ACTION
@@ -121,73 +117,63 @@ show_menu() {
 
 while true; do
   show_menu
-
-  case "$ACTION" in
+  case $ACTION in
     q)
       echo "Bye."
       exit 0
       ;;
     1)
-      if [[ "$AUTH_MODE" == "plain" ]]; then
-        echo "Error: certificate auth is disabled (AUTH_MODE=plain)."
-        read -rp "Press Enter to return to menu..." dummy
+      if [[ $AUTH_MODE == plain ]]; then
+        echo "Certificate auth is disabled (AUTH_MODE=plain)."; pause
       else
-        "$SCRIPTS_DIR/gen-client"
+        "$DIR/gen-client"
       fi
       ;;
     2)
-      if [[ "$AUTH_MODE" == "cert" ]]; then
-        echo "Error: password auth is disabled (AUTH_MODE=cert)."
-        read -rp "Press Enter to return to menu..." dummy
+      if [[ $AUTH_MODE == cert ]]; then
+        echo "Password auth is disabled (AUTH_MODE=cert)."; pause
       else
-        "$SCRIPTS_DIR/gen-login"
+        "$DIR/gen-login"
       fi
       ;;
     3)
-      "$SCRIPTS_DIR/user-center"
+      "$DIR/user-center"
       ;;
     4)
-      echo "Showing last 200 lines (Ctrl+C to exit):"
-      sudo journalctl -u ocserv -n 200 -f
+      echo "Last 200 lines, following (Ctrl+C to return):"
+      trap ':' INT
+      journalctl -u ocserv -n 200 -f
+      trap - INT
       ;;
     5)
-      sudo nano "$OCSERV_CONF"
+      before=$(stat -c %Y -- "$OCSERV_CONF" 2>/dev/null)
+      SUDO_EDITOR=$EDITOR_CMD sudoedit "$OCSERV_CONF"
+      if [[ $(stat -c %Y -- "$OCSERV_CONF" 2>/dev/null) != "$before" ]]; then
+        echo "ocserv.conf changed. Apply: 7 — Reload, or 6 — Restart for auth, ports and certificates."
+      fi
+      pause
       ;;
     6)
-      echo "========== Restarting ocserv =========="
-      sudo systemctl restart ocserv
-      echo "✅ ocserv restarted."
-      echo "======================================="
-      read -rp "Press Enter to return to menu..." dummy
+      if sudo -n "$SYSTEMCTL" restart ocserv; then echo "✅ ocserv restarted."; else echo "❌ Restart failed."; fi
+      pause
       ;;
     7)
-      echo "========== Reloading config =========="
-      sudo "$OCCTL" reload
-      echo "✅ Configuration reloaded."
-      echo "======================================"
-      read -rp "Press Enter to return to menu..." dummy
+      if occtl reload; then echo "✅ Configuration reloaded."; else echo "❌ Reload failed."; fi
+      pause
       ;;
     8)
-      echo "========== Active connections =========="
-      sudo "$OCCTL" show users
-      echo "========================================"
-      read -rp "Press Enter to return to menu..." dummy
+      occtl show users
+      pause
       ;;
     9)
-      if [[ "${NAMES_ENABLED:-no}" != "yes" ]]; then
-        echo "Name pool is disabled (NAMES_ENABLED=no in ocservice.conf)."
-        read -rp "Press Enter to return to menu..." dummy
-      elif [[ ! -f "$NAMES_FILE" ]]; then
-        echo "Name pool file not found: $NAMES_FILE"
-        read -rp "Press Enter to return to menu..." dummy
+      if [[ $NAMES_ENABLED != yes ]]; then
+        echo "Name pool is disabled (NAMES_ENABLED=no)."; pause
       else
-        nano "$NAMES_FILE"
+        "$EDITOR_CMD" "$NAMES_FILE"
       fi
-      ;;    
+      ;;
     *)
-      echo "Invalid choice."
-      read -rp "Press Enter to return to menu..." dummy
+      echo "Invalid choice."; pause
       ;;
   esac
-
 done

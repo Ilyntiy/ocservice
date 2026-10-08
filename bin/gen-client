@@ -1,140 +1,87 @@
 #!/bin/bash
+# gen-client — create a certificate-based VPN user — https://github.com/Ilyntiy/ocservice
 
-# gen-client — create a new certificate-based VPN user
-# Generates an easy-rsa client certificate and exports it as a .p12 file.
-# Part of ocservice — https://github.com/Ilyntiy/ocservice
-
-# =============================================================================
-# Load config
-# =============================================================================
-
-CONFIG="$(dirname "$(realpath "$0")")/ocservice.conf"
-if [[ ! -f "$CONFIG" ]]; then
-  echo "Error: config file not found: $CONFIG"
-  echo "Run install.sh first or create ocservice.conf manually."
-  exit 1
-fi
-source "$CONFIG"
-
-CERT_CACHE_FILE="${CERT_CACHE_FILE:-$(dirname "$(realpath "$0")")/cert_cache}"
-
-LIB="$(dirname "$(realpath "$0")")/ocnames"
-if [[ ! -f "$LIB" ]]; then
-  echo "Error: ocnames not found: $LIB"
-  exit 1
-fi
-source "$LIB"
-
-mkdir -p "$VPN_CLIENTS_DIR" "$CONFIG_PER_USER"
-
-# =============================================================================
-# Username
-# =============================================================================
+DIR=$(dirname "$(realpath "$0")")
+[[ -f $DIR/ocservice.conf ]] || { echo "Error: $DIR/ocservice.conf not found. Run install.sh first."; exit 1; }
+# shellcheck source=/dev/null
+source "$DIR/ocservice.conf"
+# shellcheck source=ocnames
+source "$DIR/ocnames" || exit 1
 
 pick_username
-
-# Guard against duplicate certificate (belt-and-suspenders)
-if [[ -f "$EASYRSA_DIR/pki/issued/$USERNAME.crt" ]]; then
+if [[ -e $EASYRSA_DIR/pki/issued/$USERNAME.crt ]]; then
   echo "Error: certificate for '$USERNAME' already exists."
   exit 1
 fi
 
-# =============================================================================
-# Certificate validity
-# =============================================================================
-
 while true; do
-  read -rp "Certificate validity in days: " CERT_DAYS
+  read -rp "Certificate validity in days [365]: " CERT_DAYS
   CERT_DAYS=${CERT_DAYS:-365}
-  if [[ ! "$CERT_DAYS" =~ ^[0-9]+$ ]] || (( CERT_DAYS < 1 )); then
-    echo "Error: enter a positive number of days."
-  else
-    break
-  fi
+  [[ $CERT_DAYS =~ ^[1-9][0-9]*$ ]] && break
+  echo "Error: enter a positive number of days."
 done
-
-# =============================================================================
-# Max simultaneous connections
-# =============================================================================
 
 while true; do
-  read -rp "Max simultaneous connections (0 = unlimited): " MAX_CONN
+  read -rp "Max simultaneous connections (0 = unlimited) [0]: " MAX_CONN
   MAX_CONN=${MAX_CONN:-0}
-  if [[ ! "$MAX_CONN" =~ ^[0-9]+$ ]]; then
-    echo "Error: enter a number (0 = unlimited)."
-  else
-    break
-  fi
+  [[ $MAX_CONN =~ ^(0|[1-9][0-9]*)$ ]] && break
+  echo "Error: enter a number (0 = unlimited)."
 done
 
-# =============================================================================
-# Generate certificate
-# =============================================================================
-
-echo "Generating certificate..."
 cd "$EASYRSA_DIR" || { echo "Error: easy-rsa directory not found: $EASYRSA_DIR"; exit 1; }
 
-export EASYRSA_CERT_EXPIRE=$CERT_DAYS
-./easyrsa build-client-full "$USERNAME" nopass || {
+echo "Generating certificate..."
+if ! EASYRSA_CERT_EXPIRE=$CERT_DAYS ./easyrsa build-client-full "$USERNAME" nopass; then
   echo "Error: certificate generation failed."
   exit 1
-}
+fi
 
-# =============================================================================
-# Export .p12
-# =============================================================================
+# OpenSSL 3+ defaults to AES/PBKDF2 in PKCS#12, which some mobile clients cannot import
+legacy=()
+case $("$OPENSSL" version) in
+  "OpenSSL 1."*|LibreSSL*) ;;
+  *) legacy=(-legacy) ;;
+esac
 
-PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c $PASSWORD_LENGTH)
+PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$PASSWORD_LENGTH")
 
-openssl pkcs12 -export \
-  -in pki/issued/"$USERNAME".crt \
-  -inkey pki/private/"$USERNAME".key \
-  -name "$USERNAME" \
-  -certfile pki/ca.crt \
-  -caname "$SERVER_NAME" \
-  -out "$VPN_CLIENTS_DIR/$USERNAME.p12" \
-  -passout pass:"$PASSWORD" \
-  -macalg sha1 \
-  --legacy || {
-  echo "Error: .p12 export failed."
+if ! (umask 077; P12_PASS=$PASSWORD "$OPENSSL" pkcs12 -export \
+      -in "pki/issued/$USERNAME.crt" \
+      -inkey "pki/private/$USERNAME.key" \
+      -name "$USERNAME" \
+      -certfile pki/ca.crt \
+      -caname "$SERVER_NAME" \
+      -out "$VPN_CLIENTS_DIR/$USERNAME.p12" \
+      -passout env:P12_PASS \
+      -macalg sha1 \
+      "${legacy[@]}"); then
+  echo "Error: .p12 export failed. The private key is kept in $EASYRSA_DIR/pki/private/."
   exit 1
-}
+fi
 
-# Write config-per-user only after successful certificate creation
+shred -u -- "pki/private/$USERNAME.key"
+for f in "pki/inline/private/$USERNAME.inline" "pki/inline/$USERNAME.inline"; do
+  [[ -f $f ]] && grep -q "PRIVATE KEY" -- "$f" && shred -u -- "$f"
+done
+
 write_config_per_user "$USERNAME" "$MAX_CONN"
 
-# =============================================================================
-# Read certificate dates
-# =============================================================================
-
-START=$(openssl x509 -in "$EASYRSA_DIR/pki/issued/$USERNAME.crt" -noout -startdate | cut -d= -f2)
-END=$(openssl x509   -in "$EASYRSA_DIR/pki/issued/$USERNAME.crt" -noout -enddate   | cut -d= -f2)
-
-# Write to certificate cache
-START_FMT=$(date -d "$START" +%Y-%m-%d)
-END_FMT=$(date -d "$END" +%Y-%m-%d)
-echo "$USERNAME|$START_FMT|$END_FMT" >> "$CERT_CACHE_FILE"
-
-# =============================================================================
-# Write to history log
-# =============================================================================
-
+dates=$("$OPENSSL" x509 -in "pki/issued/$USERNAME.crt" -noout -startdate -enddate)
+START=$(sed -n 's/^notBefore=//p' <<< "$dates")
+END=$(sed -n 's/^notAfter=//p' <<< "$dates")
+echo "$USERNAME|$(date -d "$START" +%Y-%m-%d)|$(date -d "$END" +%Y-%m-%d)" >> "$CERT_CACHE_FILE"
 echo "[cert-created] $(date '+%Y-%m-%d %H:%M') | $USERNAME | $START -> $END" >> "$USER_HISTORY"
-
-# =============================================================================
-# OUTPUT TEMPLATE — edit this block to customize what is shown / sent to users
-# =============================================================================
 
 echo
 echo "================================================"
 echo "👤 Username:             $USERNAME"
 echo "🔑 Certificate password: $PASSWORD"
-echo "🔢 Max connections:      $MAX_CONN" "(0 = unlimited)"
+echo "🔢 Max connections:      $MAX_CONN (0 = unlimited)"
 echo "📅 Valid for:            $CERT_DAYS days"
 echo "📄 Certificate file:     $VPN_CLIENTS_DIR/$USERNAME.p12"
 echo "🌐 Gateway:              $SERVER_URL"
-[[ -n "$DOCS_URL" ]] && echo "📘 Docs / channel:       $DOCS_URL"
+[[ -n $DOCS_URL ]] && echo "📘 Docs / channel:       $DOCS_URL"
 echo "================================================"
 echo
 
-read -rp "Press Enter to return to menu..."
+read -rp "Press Enter to return to menu..." _

@@ -1,144 +1,96 @@
-#!/bin/bash
+# ocnames — shared helpers for ocservice scripts (sourced, not executed) — https://github.com/Ilyntiy/ocservice
 
-# ocnames — username pool helper for ocservice tools
-# Sourced by gen-client and gen-login. Do not execute directly.
-# Part of ocservice — https://github.com/Ilyntiy/ocservice
-
-# =============================================================================
-# pick_username
-#
-# Prompts the operator to pick a username from the name pool or enter manually.
-# Writes the result to the USERNAME variable.
-#
-# Duplicate detection sources:
-#   - easy-rsa pki/issued/*.crt  (certificate users)
-#   - ocpasswd                   (login/password users)
-#   - names_used.txt             (pool guard)
-#
-# If a name is found occupied but missing from NAMES_USED_FILE,
-# it is added there automatically to resync state.
-#
-# Required variables (set via ocservice.conf):
-#   NAMES_ENABLED, NAMES_FILE, NAMES_USED_FILE, EASYRSA_DIR, USER_FILE
-# =============================================================================
+NAME_RE='^[a-zA-Z0-9_-]+$'
 
 pick_username() {
-  if [[ "${NAMES_ENABLED:-no}" == "yes" ]]; then
-    echo
-    echo "  1 — Pick name from pool"
-    echo "  2 — Enter manually"
-    echo
-    while true; do
-      read -rp "Select option: " _choice
-      _choice="${_choice:-1}"
-      case "$_choice" in
-        1) _pick_from_pool; return ;;
-        2) _enter_manually; return ;;
-        *) echo "Please enter 1 or 2." ;;
-      esac
-    done
-  else
+  local choice
+  if [[ $NAMES_ENABLED != yes ]]; then
     _enter_manually
+    return
   fi
+  echo
+  echo "  1 — Pick name from pool"
+  echo "  2 — Enter manually"
+  echo
+  while true; do
+    read -rp "Select option [1]: " choice
+    case ${choice:-1} in
+      1) _pick_from_pool; return ;;
+      2) _enter_manually; return ;;
+      *) echo "Please enter 1 or 2." ;;
+    esac
+  done
 }
 
-# =============================================================================
-# _build_used_set — populate _USED_SET from all three sources
-# =============================================================================
-
 _build_used_set() {
+  local crt name
   declare -gA _USED_SET=()
-
-  # From easy-rsa issued certificates
-  if [[ -d "$EASYRSA_DIR/pki/issued" ]]; then
-    for _crt in "$EASYRSA_DIR/pki/issued/"*.crt; do
-      [[ -f "$_crt" ]] || continue
-      _name="$(basename "$_crt" .crt)"
-      _USED_SET["$_name"]=1
+  if [[ -n $EASYRSA_DIR && -d $EASYRSA_DIR/pki/issued ]]; then
+    for crt in "$EASYRSA_DIR"/pki/issued/*.crt; do
+      [[ -f $crt ]] || continue
+      name=${crt##*/}
+      _USED_SET[${name%.crt}]=1
     done
   fi
-
-  # From ocpasswd
-  if [[ -f "$USER_FILE" ]]; then
-    while IFS=: read -r _name _rest; do
-      [[ -n "$_name" ]] && _USED_SET["$_name"]=1
+  if [[ -n $USER_FILE && -f $USER_FILE ]]; then
+    while IFS=: read -r name _; do
+      [[ -n $name ]] && _USED_SET[$name]=1
     done < "$USER_FILE"
   fi
-
-  # From names_used.txt
-  if [[ -f "$NAMES_USED_FILE" ]]; then
-    while IFS= read -r _name; do
-      _name="${_name//[$'\t\r\n ']}"
-      [[ -n "$_name" && "$_name" != \#* ]] && _USED_SET["$_name"]=1
+  if [[ -f $NAMES_USED_FILE ]]; then
+    while IFS= read -r name; do
+      name=${name//[$'\t\r ']}
+      [[ -n $name && $name != \#* ]] && _USED_SET[$name]=1
     done < "$NAMES_USED_FILE"
   fi
 }
 
-# =============================================================================
-# _pick_from_pool — pick a random available name from NAMES_FILE
-# =============================================================================
-
 _pick_from_pool() {
-  if [[ ! -f "$NAMES_FILE" ]]; then
-    echo "Warning: name pool file not found: $NAMES_FILE"
-    echo "Falling back to manual entry."
+  local name all=() available=()
+  if [[ ! -f $NAMES_FILE ]]; then
+    echo "Name pool not found: $NAMES_FILE — falling back to manual entry."
     _enter_manually
     return
   fi
-
   _build_used_set
+  while IFS= read -r name; do
+    name=${name//[$'\t\r ']}
+    [[ -n $name && $name != \#* ]] || continue
+    if [[ ! $name =~ $NAME_RE ]]; then
+      echo "Skipping invalid pool name: $name"
+      continue
+    fi
+    all+=("$name")
+  done < "$NAMES_FILE"
 
-  mapfile -t _ALL_NAMES < <(grep -v '^\s*#' "$NAMES_FILE" | grep -v '^\s*$')
-
-  if [[ ${#_ALL_NAMES[@]} -eq 0 ]]; then
-    echo "Warning: name pool file is empty."
-    echo "Falling back to manual entry."
-    _enter_manually
-    return
-  fi
-
-  # Build list of available names; resync stale entries to names_used.txt
-  _AVAILABLE=()
-  for _name in "${_ALL_NAMES[@]}"; do
-    _name="${_name//[$'\t\r\n ']}"
-    if [[ -z "${_USED_SET[$_name]+x}" ]]; then
-      _AVAILABLE+=("$_name")
-    else
-      if ! grep -qxF "$_name" "$NAMES_USED_FILE" 2>/dev/null; then
-        echo "$_name" >> "$NAMES_USED_FILE"
-      fi
+  for name in "${all[@]}"; do
+    if [[ -z ${_USED_SET[$name]+x} ]]; then
+      available+=("$name")
+    elif ! grep -qxF -- "$name" "$NAMES_USED_FILE" 2>/dev/null; then
+      echo "$name" >> "$NAMES_USED_FILE"
     fi
   done
 
-  if [[ ${#_AVAILABLE[@]} -eq 0 ]]; then
-    echo "Warning: all names in the pool are already in use."
-    echo "Add more names to: $NAMES_FILE"
-    echo "Falling back to manual entry."
+  if (( ${#available[@]} == 0 )); then
+    echo "No free names in the pool (add more to $NAMES_FILE) — falling back to manual entry."
     _enter_manually
     return
   fi
 
-  # Pick a random available name and record it
-  USERNAME="${_AVAILABLE[$RANDOM % ${#_AVAILABLE[@]}]}"
-  mkdir -p "$(dirname "$NAMES_USED_FILE")"
+  USERNAME=${available[RANDOM % ${#available[@]}]}
   echo "$USERNAME" >> "$NAMES_USED_FILE"
-
   echo "Username: $USERNAME"
 }
-
-# =============================================================================
-# _enter_manually — prompt for a username and validate it
-# =============================================================================
 
 _enter_manually() {
   _build_used_set
   while true; do
     read -rp "Username: " USERNAME
-    if [[ -z "$USERNAME" ]]; then
+    if [[ -z $USERNAME ]]; then
       echo "Error: username cannot be empty."
-    elif [[ ! "$USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-      echo "Error: invalid username. Allowed characters: letters, digits, - and _"
-    elif [[ -n "${_USED_SET[$USERNAME]+x}" ]]; then
+    elif [[ ! $USERNAME =~ $NAME_RE ]]; then
+      echo "Error: allowed characters are letters, digits, - and _"
+    elif [[ -n ${_USED_SET[$USERNAME]+x} ]]; then
       echo "Error: username '$USERNAME' is already taken."
     else
       break
@@ -146,29 +98,10 @@ _enter_manually() {
   done
 }
 
-# =============================================================================
-# write_config_per_user
-#
-# Creates a config-per-user file for the given user.
-# Usage:
-#   write_config_per_user "$USERNAME" "$MAX_CONN"  — max-same-clients active
-#   write_config_per_user "$USERNAME"              — max-same-clients commented
-#
-# Required variables (set via ocservice.conf):
-#   CONFIG_PER_USER
-# =============================================================================
-
 write_config_per_user() {
-  local user=$1
-  local max_conn=${2:-}
-
-  if [[ -n "$max_conn" ]]; then
-    local max_line="max-same-clients = $max_conn"
-  else
-    local max_line="# max-same-clients = 0"
-  fi
-
-  cat > "$CONFIG_PER_USER/$user" << EOF
+  local max_line="# max-same-clients = 0"
+  [[ -n ${2:-} ]] && max_line="max-same-clients = $2"
+  cat > "$CONFIG_PER_USER/$1" << EOF
 # Per-user configuration file for ocserv
 # Uncomment and set options as needed
 
